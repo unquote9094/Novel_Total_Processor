@@ -1,0 +1,116 @@
+name: CI/CD
+
+on:
+  push:
+  pull_request:
+    types:
+      - opened
+  workflow_dispatch: # allow manual execution
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Rust format
+        run: cargo fmt --all -- --check
+
+      - name: Run Rust linter
+        run: cargo clippy -- -D warnings
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Build release
+        run: cargo build --release
+
+  create-release:
+    name: Create release
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        if: github.ref == 'refs/heads/main'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Dependencies
+        if: github.ref == 'refs/heads/main'
+        run: |
+          npm install -g \
+            semantic-release \
+            @semantic-release/git \
+            @semantic-release/changelog \
+            @semantic-release/exec \
+            @semantic-release/commit-analyzer \
+            conventional-changelog-conventionalcommits
+
+      - name: Generate Semantic Release Notes and Create Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: npx semantic-release
+
+  build-binaries:
+    name: Build and upload release binaries
+    needs: create-release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            image: ghcr.io/rust-cross/rust-musl-cross:x86_64-musl
+            name: ez-books-x86_64-unknown-linux-musl
+          - target: aarch64-unknown-linux-musl
+            image: ghcr.io/rust-cross/rust-musl-cross:aarch64-musl
+            name: ez-books-aarch64-unknown-linux-musl
+
+    container:
+      image: ${{ matrix.image }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename binary with target name
+        run: |
+          cp target/${{ matrix.target }}/release/ez-books ${{ matrix.name }}
+
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          TAG="v$(cat .version)"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Upload binary to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_tag.outputs.tag }}
+          files: ${{ matrix.name }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}

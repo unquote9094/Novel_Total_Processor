@@ -1,0 +1,59 @@
+/* EPUB 기본 스타일 (모바일 리더기 최적화) */
+
+body {
+    font-family: "Noto Sans KR", "Malgun Gothic", sans-serif;
+    font-size: 1em;
+    line-height: 1.8;
+    margin: 1em;
+    padding: 0;
+    text-align: justify;
+    word-break: keep-all;
+}
+
+h1 {
+    font-size: 1.8em;
+    font-weight: bold;
+    margin: 1.5em 0 1em 0;
+    text-align: center;
+    page-break-before: always;
+}
+
+h2 {
+    font-size: 1.4em;
+    font-weight: bold;
+    margin: 1.2em 0 0.8em 0;
+    page-break-after: avoid;
+}
+
+p {
+    margin: 0.5em 0;
+    text-indent: 1em;
+}
+
+/* 첫 문단은 들여쓰기 없음 */
+h1 + p, h2 + p {
+    text-indent: 0;
+}
+
+/* 구분선 */
+hr {
+    border: none;
+    border-top: 1px solid #ccc;
+    margin: 2em 0;
+}
+
+/* 인용구 */
+blockquote {
+    margin: 1em 2em;
+    padding-left: 1em;
+    border-left: 3px solid #ddd;
+    font-style: italic;
+}
+
+/* 이미지 */
+img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 1em auto;
+}

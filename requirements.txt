@@ -1,0 +1,16 @@
+# 핵심 라이브러리
+google-generativeai>=0.8.0
+perplexityai>=0.1.0
+ebooklib>=0.18
+pillow>=10.0.0
+xxhash>=3.4.0
+
+# CLI/TUI
+rich>=13.7.0
+typer>=0.12.0
+pyyaml>=6.0
+
+# 유틸리티
+tenacity>=8.2.0
+aiofiles>=23.2.0
+chardet>=5.2.0

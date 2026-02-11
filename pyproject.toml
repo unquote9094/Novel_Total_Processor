@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "novel-total-processor"
+version = "0.1.0"
+description = "소설 파일 자동 처리 파이프라인 (메타데이터 추출, EPUB 변환, 파일명 정규화)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "HKYi"}
+]
+keywords = ["novel", "epub", "metadata", "ai", "automation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    # 핵심 라이브러리
+    "google-generativeai>=0.8.0",  # Gemini API
+    "perplexityai>=0.1.0",         # Perplexity API
+    "ebooklib>=0.18",              # EPUB 생성/수정
+    "pillow>=10.0.0",              # 이미지 처리
+    "xxhash>=3.4.0",               # 빠른 해싱
+    
+    # CLI/TUI
+    "rich>=13.7.0",                # Rich UI
+    "typer>=0.12.0",               # CLI 프레임워크
+    "pyyaml>=6.0",                 # YAML 설정
+    
+    # 유틸리티
+    "tenacity>=8.2.0",             # 재시도 로직
+    "aiofiles>=23.2.0",            # 비동기 파일 I/O
+    "chardet>=5.2.0",              # 인코딩 감지
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "black>=24.0.0",
+    "ruff>=0.3.0",
+]
+
+[project.scripts]
+ntp = "novel_total_processor.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]  # line too long (black이 처리)

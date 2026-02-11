@@ -1,0 +1,7 @@
+{
+    "api_key": "AIzaSyCSy-eecOg4Lop-M0_5r5nyhMZMYsT-bhg",
+    "concurrency": 30,
+    "rate_limit_rpm": 60,
+    "model_name": "gemini-3-flash-preview",
+    "debug": false
+}

@@ -1,0 +1,6 @@
+{
+    "api_key": "AIzaSyCSy-eecOg4Lop-M0_5r5nyhMZMYsT-bhg",
+    "concurrency": 50,
+    "model_name": "gemini-3-flash-preview",
+    "debug": false
+}
