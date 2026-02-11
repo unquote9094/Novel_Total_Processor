@@ -7,10 +7,11 @@
 
 ## 📊 현재 상태
 
-### 🟢 열린 이슈 (4개)
+### 🟢 열린 이슈 (5개)
 
 | # | 제목 | 라벨 |
 |:---:|:---|:---:|
+| 5 | [기능] Phase B-1: Stage 1 메타데이터 수집 (Gemini + Perplexity) | enhancement |
 | 4 | [기능] Phase A-3: Stage 0 파일 인덱싱 (스캔 + 해시 + 중복감지) | enhancement |
 | 3 | [기능] Phase A-2: DB 스키마 + Config 로더 | enhancement |
 | 2 | [기능] Phase A-1: 프로젝트 초기화 (Python 구조 + Logging) | enhancement |
@@ -18,4 +19,4 @@
 
 ---
 
-> **마지막 동기화**: 2026-02-11 23:09:49
+> **마지막 동기화**: 2026-02-11 23:15:02
