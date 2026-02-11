@@ -35,15 +35,8 @@ class GeminiClient:
     def __init__(self):
         """초기화"""
         self.config = get_config()
-        
-        # API 키 확인
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY environment variable not set")
-        
-        # Gemini 설정
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel(self.config.api.gemini.model)
+        self.model = None
+        self._initialized = False
         
         # Rate limiting (RPM)
         self.rate_limit = self.config.api.gemini.rate_limit
@@ -54,7 +47,31 @@ class GeminiClient:
         self.cache_dir = Path("data/cache/ai_meta")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"GeminiClient initialized: model={self.config.api.gemini.model}, rate_limit={self.rate_limit} RPM")
+        logger.info(f"GeminiClient created (lazy init): rate_limit={self.rate_limit} RPM")
+    
+    def _ensure_initialized(self):
+        """API 사용 전 초기화 확인"""
+        if self._initialized:
+            return
+        
+        # API 키 확인
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "GEMINI_API_KEY 환경변수가 설정되지 않았습니다.\n"
+                "Environment variable GEMINI_API_KEY is not set.\n"
+                "설정 방법 (How to set):\n"
+                "  PowerShell: $env:GEMINI_API_KEY=\"your_api_key\"\n"
+                "  CMD: set GEMINI_API_KEY=your_api_key\n"
+                "  또는 .env 파일 사용 (or use .env file)"
+            )
+        
+        # Gemini 설정
+        genai.configure(api_key=api_key)
+        self.model = genai.GenerativeModel(self.config.api.gemini.model)
+        self._initialized = True
+        
+        logger.info(f"GeminiClient initialized: model={self.config.api.gemini.model}")
     
     def _wait_for_rate_limit(self) -> None:
         """Rate limit 대기"""
@@ -125,6 +142,7 @@ class GeminiClient:
         Returns:
             응답 텍스트
         """
+        self._ensure_initialized()  # API 사용 전 초기화
         self._wait_for_rate_limit()
         
         try:

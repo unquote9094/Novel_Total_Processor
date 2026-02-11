@@ -50,6 +50,7 @@ dev = [
 
 [project.scripts]
 ntp = "novel_total_processor.cli:app"
+ntp-menu = "novel_total_processor.menu:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
