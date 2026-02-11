@@ -7,13 +7,14 @@
 
 ## 📊 현재 상태
 
-### 🟢 열린 이슈 (2개)
+### 🟢 열린 이슈 (3개)
 
 | # | 제목 | 라벨 |
 |:---:|:---|:---:|
+| 3 | [기능] Phase A-2: DB 스키마 + Config 로더 | enhancement |
 | 2 | [기능] Phase A-1: 프로젝트 초기화 (Python 구조 + Logging) | enhancement |
 | 1 | [기능] Initial project structure setup | enhancement |
 
 ---
 
-> **마지막 동기화**: 2026-02-11 22:48:46
+> **마지막 동기화**: 2026-02-11 23:01:32
