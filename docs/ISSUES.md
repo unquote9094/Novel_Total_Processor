@@ -7,10 +7,11 @@
 
 ## 📊 현재 상태
 
-### 🟢 열린 이슈 (8개)
+### 🟢 열린 이슈 (9개)
 
 | # | 제목 | 라벨 |
 |:---:|:---|:---:|
+| 9 | [기능] Phase E: Stage 6 + TUI + CLI (통합 파이프라인) | enhancement |
 | 8 | [기능] Phase D-2: Stage 5 EPUB 생성 (EbookLib + 메타데이터) | enhancement |
 | 7 | [기능] Phase C: Stage 2 화수 검증 (샘플링 + AI 분석) | enhancement |
 | 6 | [기능] Phase B-2: Stage 3 파일명 생성 (규칙 엔진 + 검수) | enhancement |
@@ -22,4 +23,4 @@
 
 ---
 
-> **마지막 동기화**: 2026-02-11 23:32:19
+> **마지막 동기화**: 2026-02-11 23:35:36
