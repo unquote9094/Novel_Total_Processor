@@ -1,0 +1,135 @@
+# Task: 파이프라인 재설계 + Stage 4 구현 + 품질 개선
+
+## 완료된 작업
+- [x] 프로젝트 초기화 + Git/GitHub
+- [x] 아키텍처 설계 (#1)
+- [x] Phase A: 인프라 (#2~#4)
+- [x] Phase B: 메타+파일명 (#5~#6)
+- [x] Phase C: 화수 검증 (#7)
+- [x] Phase D-2: EPUB 생성 (#8)
+- [x] Phase E: CLI+TUI (#9)
+- [x] 사용성 개선: 메뉴 TUI (#10)
+
+---
+
+## 작업 A: 긴급 버그 수정
+
+- [ ] A-1. config.yml `source_folders`를 빈 리스트로 변경
+- [ ] A-2. `tkinter.filedialog.askdirectory()` 폴더 선택 대화상자 구현
+  - [ ] 선택한 폴더를 config.yml에 자동 저장
+  - [ ] 다음 실행 시 저장된 폴더 재사용 (없으면 다시 선택)
+- [ ] A-3. `google.generativeai` → `google.genai` 마이그레이션
+  - [ ] gemini_client.py import 변경
+  - [ ] API 호출 코드 수정 (새 SDK 인터페이스)
+  - [ ] FutureWarning 제거 확인
+- [ ] A-4. 환경변수 에러 메시지 한글화 확인
+
+## 작업 B: Stage 4 — 챕터 분할 (NovelAIze-SSR 포팅)
+
+- [ ] B-1. [Chapter](file:///e:/DEVz/07_TXT_Split_Summary/ver001/novel_aize_ssr/structure.py#3-15) 데이터 클래스 작성
+  - [ ] cid, title, subtitle, body, length, chapter_type 필드
+  - [ ] chapter_type: 본편/외전/에필로그/후일담/작가의말
+- [ ] B-2. [Sampler](file:///e:/DEVz/07_TXT_Split_Summary/ver001/novel_aize_ssr/sampler.py#3-105) 클래스 포팅 (sampler.py 그대로)
+  - [ ] [extract_samples()](file:///e:/DEVz/07_TXT_Split_Summary/ver001/novel_aize_ssr/sampler.py#16-59): 균등 30개 샘플 (32KB × 30)
+  - [ ] [extract_samples_from()](file:///e:/DEVz/07_TXT_Split_Summary/ver001/novel_aize_ssr/sampler.py#60-105): 특정 위치부터 재샘플링
+  - [ ] 소규모 파일은 전체 읽기 (500KB 이하)
+  - [ ] chardet 인코딩 감지 통합
+- [ ] B-3. AI 프롬프트 작성 (2가지 요청)
+  - [ ] 요청 1: 챕터 구분 정규식 패턴 (화 구분자)
+  - [ ] 요청 2: 챕터 소제목/부제목 패턴
+  - [ ] 응답 형식: JSON `{"chapter_pattern": "...", "subtitle_pattern": "..."}`
+- [ ] B-4. [Splitter](file:///e:/DEVz/07_TXT_Split_Summary/ver001/novel_aize_ssr/splitter.py#6-145) 클래스 포팅 (splitter.py 그대로)
+  - [ ] [split()](file:///e:/DEVz/07_TXT_Split_Summary/ver001/novel_aize_ssr/splitter.py#14-93): Generator 기반 스트리밍 분할
+  - [ ] 100자 미만 챕터 병합 (연속 제목 방지)
+  - [ ] 마지막 챕터 안전 처리
+  - [ ] ⭐ 분할 시 소제목/부제목도 함께 수집
+  - [ ] ⭐ 각 챕터의 제목 라인에서 부제목 추출
+- [ ] B-5. [PatternManager](file:///e:/DEVz/07_TXT_Split_Summary/ver001/novel_aize_ssr/pattern_manager.py#6-89) 클래스 포팅 (pattern_manager.py 그대로)
+  - [ ] [find_best_pattern()](file:///e:/DEVz/07_TXT_Split_Summary/ver001/novel_aize_ssr/pattern_manager.py#20-42): AI → 패턴 → 검증 → Retry
+  - [ ] [verify_pattern()](file:///e:/DEVz/07_TXT_Split_Summary/ver001/novel_aize_ssr/splitter.py#94-145): 커버리지 99% 목표
+  - [ ] [_run_adaptive_retry()](file:///e:/DEVz/07_TXT_Split_Summary/ver001/novel_aize_ssr/pattern_manager.py#43-80): 최대 10회, 실패 지점에서 재샘플링
+  - [ ] [_try_fallback()](file:///e:/DEVz/07_TXT_Split_Summary/ver001/novel_aize_ssr/pattern_manager.py#81-89): 범용 패턴 `\d+\s*화`
+- [ ] B-6. 챕터 제목 분석 — 본편/외전/에필로그 분류
+  - [ ] 모든 챕터 제목 수집 후 패턴 분석
+  - [ ] 본편: 시작화~끝화 범위
+  - [ ] 외전: 시작화~끝화 범위
+  - [ ] 에필로그/후일담/작가의 말 감지
+  - [ ] 결과를 DB `chapter_info` 형태로 저장
+  - [ ] JSON 캐시 저장 (`data/cache/chapter_split/{hash}.json`)
+- [ ] B-7. `ChapterSplitRunner` 메인 실행기
+  - [ ] DB에서 pending 파일 조회
+  - [ ] Sampler → AI → PatternManager → Splitter 파이프라인
+  - [ ] 챕터 분류 결과 DB 저장
+  - [ ] processing_state 업데이트 (stage4_split = 1)
+- [ ] B-8. DB 스키마 업데이트
+  - [ ] `chapter_info` 테이블 추가 (또는 novels 테이블 컬럼)
+  - [ ] chapter_type, chapter_count, subtitle 등 저장
+
+## 작업 C: Stage 2 수정 — Stage 4 결과 활용
+
+- [ ] C-1. stage2_episode.py를 Stage 4 결과 기반으로 수정
+  - [ ] 기존 AI 호출 로직 제거 (Stage 4에서 이미 파악)
+  - [ ] Stage 4의 챕터 분류 결과를 DB에서 읽기
+  - [ ] 본편 화수 범위, 외전 화수 범위 검증
+  - [ ] 파일명의 화수 vs 실제 화수 불일치 경고
+- [ ] C-2. processing_state 순서 업데이트
+  - [ ] stage4_split 완료 후에 stage2_episode 진행되도록
+
+## 작업 D: Stage 5 수정 — 다중 챕터 EPUB + EPUB 원본 보강
+
+- [ ] D-1. TXT → EPUB (풀 생성)
+  - [ ] Stage 4 챕터 리스트 받아서 챕터별 xhtml 생성
+  - [ ] 챕터 제목: `<h1>147화</h1>`
+  - [ ] 소제목: `<h2>73. 완장 (5)</h2>`
+  - [ ] **NCX 목차 필수** (본편/외전/에필로그 구분)
+  - [ ] 메타데이터 삽입 (제목/작가/장르/태그)
+  - [ ] 표지 이미지 삽입
+- [ ] D-2. EPUB 원본 보강 처리
+  - [ ] 기존 EPUB 열기 (ebooklib)
+  - [ ] 표지 확인 → 없으면 Stage 1 표지 삽입
+  - [ ] 메타데이터 확인 → 부족하면 수집 정보로 업데이트
+  - [ ] 목차(NCX) 확인 → 없으면 xhtml 기반 생성
+  - [ ] 챕터 구조 확인 (1개 xhtml에 전부? → 분할 필요 플래그)
+  - [ ] 보강된 EPUB 저장
+- [ ] D-3. 목차 생성 로직
+  - [ ] 본편/외전/에필로그 섹션 구분
+  - [ ] 각 챕터에 제목 + 소제목 포함
+  - [ ] 계층형 목차 (본편 > 1화, 2화... / 외전 > 1화, 2화...)
+
+## 작업 E: 검증 시스템
+
+- [ ] E-1. verifier.py 생성
+- [ ] E-2. 글자 수 비교 (원본 vs EPUB, 손실률 계산)
+- [ ] E-3. 챕터 수 검증 (Stage 4 분할 수 vs EPUB xhtml 수)
+- [ ] E-4. 첫 챕터 일치 검증 (원본 첫 100자)
+- [ ] E-5. 마지막 챕터 일치 검증 (원본 마지막 100자)
+- [ ] E-6. 메타데이터 존재 검증 (제목/작가/장르/태그/표지)
+- [ ] E-7. 표지 이미지 검증 (존재 + 크기)
+- [ ] E-8. 목차(NCX) 검증 (존재 + 항목 수)
+- [ ] E-9. 중간 챕터 샘플 검증 (랜덤 3개)
+- [ ] E-10. EPUB 구조 무결성 (ZIP, mimetype, OPF)
+- [ ] E-11. 검증 리포트 출력 (Rich 테이블)
+
+## 작업 F: 파일 선택 UI + 메타 상태 표시
+
+- [ ] F-1. 파일 목록 테이블에 수집 상태 컬럼 추가
+  - [ ] 작가✅/❌, 장르✅/❌, 표지✅/❌, 태그✅/❌, 완결✅/❌, 화수✅/❌
+- [ ] F-2. 파일 선택 모드 구현
+  - [ ] [A] 전체 처리
+  - [ ] [S] 번호 선택 (1,3,5)
+  - [ ] [R] 범위 선택 (1-10)
+  - [ ] [F] 파일명 검색
+- [ ] F-3. 페이지네이션 (20개씩 표시, [P] 다음/이전)
+
+## 작업 G: DB 뷰어 + 메뉴 재구성
+
+- [ ] G-1. 메뉴 순서 수정 (0→1→4→2→3→5→검증)
+- [ ] G-2. DB 뷰어 메뉴 [8] 구현
+  - [ ] 파일 목록 (전체/검색/필터)
+  - [ ] 메타데이터 상세 (작가/장르/태그/표지/완결)
+  - [ ] 챕터 분할 결과 (본편/외전 화수)
+  - [ ] 파일명 매핑 (원본→새이름)
+  - [ ] 통계 (전체 현황)
+- [ ] G-3. 파이프라인 실행 순서 수정
+  - [ ] 기존: 0→1→2→3→5
+  - [ ] 수정: 0→1→4→2→3→5→검증

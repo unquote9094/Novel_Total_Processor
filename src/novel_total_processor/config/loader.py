@@ -213,3 +213,68 @@ def get_rules() -> FilenameRules:
     if _rules is None:
         _rules = load_rules()
     return _rules
+
+
+def save_config(config: Config, config_path: str = "config/config.yml") -> None:
+    """config.yml 저장
+    
+    Args:
+        config: Config 객체
+        config_path: 설정 파일 경로
+    """
+    path = Path(config_path)
+    
+    # Config 객체를 dict로 변환
+    data = {
+        "paths": {
+            "source_folders": config.paths.source_folders,
+            "output_folder": config.paths.output_folder,
+            "database": config.paths.database,
+            "covers": config.paths.covers,
+            "logs": config.paths.logs
+        },
+        "api": {
+            "gemini": {
+                "model": config.api.gemini.model,
+                "max_retries": config.api.gemini.max_retries,
+                "timeout": config.api.gemini.timeout,
+                "rate_limit": config.api.gemini.rate_limit
+            },
+            "perplexity": {
+                "search_model": config.api.perplexity.search_model,
+                "agent_model": config.api.perplexity.agent_model,
+                "max_retries": config.api.perplexity.max_retries,
+                "timeout": config.api.perplexity.timeout,
+                "rate_limit": config.api.perplexity.rate_limit
+            }
+        },
+        "processing": {
+            "max_workers": config.processing.max_workers,
+            "batch_size": config.processing.batch_size,
+            "duplicate_handling": config.processing.duplicate_handling,
+            "auto_detect_encoding": config.processing.auto_detect_encoding,
+            "default_encoding": config.processing.default_encoding
+        },
+        "epub": {
+            "version": config.epub.version,
+            "cover_size": config.epub.cover_size,
+            "css_template": config.epub.css_template,
+            "max_chars_per_chapter": config.epub.max_chars_per_chapter
+        },
+        "logging": {
+            "file_level": config.logging.file_level,
+            "console_level": config.logging.console_level,
+            "retention_days": config.logging.retention_days
+        },
+        "ui": {
+            "theme": config.ui.theme,
+            "progress_update_interval": config.ui.progress_update_interval,
+            "max_error_display": config.ui.max_error_display
+        }
+    }
+    
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    
+    logger.info(f"✅ Config saved: {config_path}")
+

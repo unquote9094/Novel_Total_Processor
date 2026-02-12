@@ -8,13 +8,17 @@ from rich.panel import Panel
 from rich.prompt import Prompt, IntPrompt, Confirm
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+from tkinter import Tk, filedialog
 from novel_total_processor.utils.logger import get_logger
 from novel_total_processor.db.schema import get_database
+from novel_total_processor.config.loader import get_config, save_config
 from novel_total_processor.stages.stage0_indexing import FileScanner
 from novel_total_processor.stages.stage1_metadata import MetadataCollector
 from novel_total_processor.stages.stage2_episode import EpisodePatternDetector
 from novel_total_processor.stages.stage3_filename import FilenameGenerator
+from novel_total_processor.stages.stage4_splitter import ChapterSplitRunner
 from novel_total_processor.stages.stage5_epub import EPUBGenerator
+from novel_total_processor.stages.verifier import EPUBVerifier
 
 logger = get_logger(__name__)
 console = Console()
@@ -26,6 +30,11 @@ class InteractiveMenu:
     def __init__(self):
         self.db = get_database()
         self.db.initialize_schema()
+        self.config = get_config()
+        
+        # 소스 폴더가 비어있으면 폴더 선택 대화상자 표시
+        if not self.config.paths.source_folders:
+            self._select_source_folders()
     
     def show_banner(self):
         """배너 표시"""
@@ -38,6 +47,31 @@ class InteractiveMenu:
 ╚═══════════════════════════════════════════════════════════╝[/bold cyan]
 """
         console.print(banner)
+    
+    def _select_source_folders(self):
+        """폴더 선택 대화상자"""
+        console.print("\n[bold yellow]📁 소스 폴더 선택 (Source Folder Selection)[/bold yellow]")
+        console.print("[dim]설정된 소스 폴더가 없습니다. 소설 파일이 있는 폴더를 선택해주세요.[/dim]\n")
+        
+        # tkinter 루트 윈도우 숨기기
+        root = Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        
+        selected_folder = filedialog.askdirectory(
+            title="소설 파일이 있는 폴더를 선택하세요"
+        )
+        
+        root.destroy()
+        
+        if selected_folder:
+            # 선택한 폴더를 config에 추가
+            self.config.paths.source_folders = [selected_folder]
+            save_config(self.config)
+            console.print(f"[green]✅ 폴더 선택 완료: {selected_folder}[/green]\n")
+        else:
+            console.print("[red]❌ 폴더가 선택되지 않았습니다. 프로그램을 종료합니다.[/red]")
+            exit(1)
     
     def show_status(self):
         """현재 상태 표시"""
@@ -52,6 +86,7 @@ class InteractiveMenu:
                 COUNT(*) as total,
                 SUM(stage0_indexed) as indexed,
                 SUM(stage1_meta) as metadata,
+                SUM(stage4_split) as split,
                 SUM(stage2_episode) as episode,
                 SUM(stage3_rename) as filename,
                 SUM(stage5_epub) as epub
@@ -60,7 +95,7 @@ class InteractiveMenu:
         row = cursor.fetchone()
         
         table = Table(show_header=True, header_style="bold cyan")
-        table.add_column("단계 (Stage)", style="cyan", width=30)
+        table.add_column("단계 (Stage)", style="cyan", width=35)
         table.add_column("완료 (Completed)", justify="right", style="green", width=15)
         table.add_column("비율 (Ratio)", justify="right", style="yellow", width=15)
         
@@ -69,9 +104,10 @@ class InteractiveMenu:
         stages = [
             ("Stage 0: 파일 인덱싱\n[dim]File Indexing[/dim]", row[1]),
             ("Stage 1: 메타데이터 수집\n[dim]Metadata Collection[/dim]", row[2]),
-            ("Stage 2: 화수 검증\n[dim]Episode Verification[/dim]", row[3]),
-            ("Stage 3: 파일명 생성\n[dim]Filename Generation[/dim]", row[4]),
-            ("Stage 5: EPUB 생성\n[dim]EPUB Generation[/dim]", row[5]),
+            ("Stage 4: 챕터 분할\n[dim]Chapter Splitting[/dim]", row[3]),
+            ("Stage 2: 화수 검증\n[dim]Episode Verification[/dim]", row[4]),
+            ("Stage 3: 파일명 생성\n[dim]Filename Generation[/dim]", row[5]),
+            ("Stage 5: EPUB 생성\n[dim]EPUB Generation[/dim]", row[6]),
         ]
         
         for stage_name, count in stages:
@@ -87,11 +123,13 @@ class InteractiveMenu:
         menu_items = [
             "[1] 📁 파일 인덱싱 (File Indexing) - Stage 0",
             "[2] 📚 메타데이터 수집 (Metadata Collection) - Stage 1",
-            "[3] 🔢 화수 검증 (Episode Verification) - Stage 2",
-            "[4] 📝 파일명 생성 (Filename Generation) - Stage 3",
-            "[5] 📖 EPUB 생성 (EPUB Generation) - Stage 5",
-            "[6] 🚀 전체 파이프라인 실행 (Run Full Pipeline)",
-            "[7] 📊 상태 확인 (Check Status)",
+            "[3] ✂️  챕터 분할 (Chapter Splitting) - Stage 4",
+            "[4] 🔢 화수 검증 (Episode Verification) - Stage 2",
+            "[5] 📝 파일명 생성 (Filename Generation) - Stage 3",
+            "[6] 📖 EPUB 생성 (EPUB Generation) - Stage 5",
+            "[7] 🚀 전체 파이프라인 실행 (Run Full Pipeline)",
+            "[8] 🔍 데이터베이스 조회 (Database Viewer)",
+            "[9] ✅ EPUB 검증 (EPUB Verification)",
             "[0] 🚪 종료 (Exit)",
         ]
         
@@ -152,6 +190,44 @@ class InteractiveMenu:
             )
             
             results = collector.run(limit=limit)
+            progress.update(task, completed=results["total"])
+        
+        console.print(f"\n[bold green]✅ 완료! (Completed!)[/bold green]")
+        console.print(f"  • 처리 파일 수 (Processed): [green]{results['total']}[/green]")
+        console.print(f"  • 성공 (Success): [green]{results['success']}[/green]")
+        console.print(f"  • 실패 (Failed): [red]{results['failed']}[/red]")
+    
+    def run_stage4(self):
+        """Stage 4 실행"""
+        console.print(Panel.fit(
+            "[bold blue]✂️  Stage 4: 챕터 분할[/bold blue]\n"
+            "[dim]Chapter Splitting - AI pattern analysis and chapter splitting[/dim]",
+            border_style="blue"
+        ))
+        
+        console.print("\n[yellow]AI를 사용하여 챕터 패턴을 분석하고 소설을 챕터 단위로 분할합니다.[/yellow]")
+        console.print("[dim]Using AI to analyze chapter patterns and split novel into chapters.[/dim]\n")
+        
+        limit = IntPrompt.ask(
+            "처리할 파일 수를 입력하세요 (Enter number of files to process)",
+            default=1
+        )
+        
+        splitter = ChapterSplitRunner(self.db)
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console
+        ) as progress:
+            task = progress.add_task(
+                "[cyan]챕터 분할 중... (Splitting chapters...)[/cyan]",
+                total=limit
+            )
+            
+            results = splitter.run(limit=limit)
             progress.update(task, completed=results["total"])
         
         console.print(f"\n[bold green]✅ 완료! (Completed!)[/bold green]")
@@ -281,6 +357,123 @@ class InteractiveMenu:
             console.print("\n[yellow]💡 생성된 EPUB 파일을 전자책 리더로 확인하세요.[/yellow]")
             console.print("[dim]Please check the generated EPUB files with an e-book reader.[/dim]")
     
+    def run_db_viewer(self):
+        """DB 뷰어 실행"""
+        console.print(Panel.fit(
+            "[bold blue]🔍 데이터베이스 조회[/bold blue]\n"
+            "[dim]Database Viewer - View files and metadata[/dim]",
+            border_style="blue"
+        ))
+        
+        conn = self.db.connect()
+        cursor = conn.cursor()
+        
+        # 파일 목록 조회
+        cursor.execute("""
+            SELECT f.id, f.file_name, f.file_size, 
+                   n.title, n.author, n.genre, n.status,
+                   ps.stage0_indexed, ps.stage1_meta, ps.stage4_split, 
+                   ps.stage2_episode, ps.stage3_rename, ps.stage5_epub
+            FROM files f
+            LEFT JOIN novels n ON f.id = n.id
+            LEFT JOIN processing_state ps ON f.id = ps.file_id
+            WHERE f.is_duplicate = 0
+            LIMIT 20
+        """)
+        
+        rows = cursor.fetchall()
+        
+        if not rows:
+            console.print("\n[yellow]파일이 없습니다.[/yellow]")
+            return
+        
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("#", style="dim", width=4)
+        table.add_column("파일명", width=30)
+        table.add_column("크기", justify="right", width=10)
+        table.add_column("제목", width=20)
+        table.add_column("작가", width=10)
+        table.add_column("0", justify="center", width=3)
+        table.add_column("1", justify="center", width=3)
+        table.add_column("4", justify="center", width=3)
+        table.add_column("2", justify="center", width=3)
+        table.add_column("3", justify="center", width=3)
+        table.add_column("5", justify="center", width=3)
+        
+        for row in rows:
+            file_id, file_name, file_size, title, author, genre, status = row[:7]
+            s0, s1, s4, s2, s3, s5 = row[7:]
+            
+            size_mb = f"{file_size/1024/1024:.1f}MB" if file_size else "-"
+            
+            table.add_row(
+                str(file_id),
+                file_name[:28] + "..." if len(file_name) > 30 else file_name,
+                size_mb,
+                (title[:18] + "...") if title and len(title) > 20 else (title or "-"),
+                author or "-",
+                "✅" if s0 else "❌",
+                "✅" if s1 else "❌",
+                "✅" if s4 else "❌",
+                "✅" if s2 else "❌",
+                "✅" if s3 else "❌",
+                "✅" if s5 else "❌"
+            )
+        
+        console.print("\n")
+        console.print(table)
+        console.print("\n[dim]Stage: 0=인덱싱, 1=메타, 4=챕터분할, 2=화수검증, 3=파일명, 5=EPUB[/dim]")
+    
+    def run_verification(self):
+        """EPUB 검증 실행"""
+        console.print(Panel.fit(
+            "[bold blue]✅ EPUB 검증[/bold blue]\n"
+            "[dim]EPUB Verification - Verify generated EPUB files[/dim]",
+            border_style="blue"
+        ))
+        
+        # 생성된 EPUB 파일 조회
+        conn = self.db.connect()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT f.id, f.file_path, f.file_hash, n.epub_path, n.title
+            FROM files f
+            JOIN novels n ON f.id = n.id
+            JOIN processing_state ps ON f.id = ps.file_id
+            WHERE ps.stage5_epub = 1 AND n.epub_path IS NOT NULL
+            LIMIT 10
+        """)
+        
+        rows = cursor.fetchall()
+        
+        if not rows:
+            console.print("\n[yellow]검증할 EPUB 파일이 없습니다.[/yellow]")
+            return
+        
+        # 파일 선택
+        console.print("\n[cyan]검증할 EPUB 파일을 선택하세요:[/cyan]\n")
+        for i, row in enumerate(rows):
+            console.print(f"  [{i+1}] {row[4]}")
+        
+        choice = IntPrompt.ask("\n선택", default=1)
+        
+        if choice < 1 or choice > len(rows):
+            console.print("[red]잘못된 선택입니다.[/red]")
+            return
+        
+        selected = rows[choice - 1]
+        file_id, file_path, file_hash, epub_path, title = selected
+        
+        # 검증 실행
+        console.print(f"\n[cyan]검증 중: {title}[/cyan]\n")
+        
+        verifier = EPUBVerifier()
+        results = verifier.verify(epub_path, file_path, file_hash)
+        
+        # 리포트 출력
+        verifier.print_report(results)
+    
     def run_pipeline(self):
         """전체 파이프라인 실행"""
         console.print(Panel.fit(
@@ -289,8 +482,8 @@ class InteractiveMenu:
             border_style="magenta"
         ))
         
-        console.print("\n[yellow]모든 단계를 순차적으로 실행합니다 (Stage 0 → 1 → 2 → 3 → 5).[/yellow]")
-        console.print("[dim]Running all stages sequentially (Stage 0 → 1 → 2 → 3 → 5).[/dim]\n")
+        console.print("\n[yellow]모든 단계를 순차적으로 실행합니다 (Stage 0 → 1 → 4 → 2 → 3 → 5).[/yellow]")
+        console.print("[dim]Running all stages sequentially (Stage 0 → 1 → 4 → 2 → 3 → 5).[/dim]\n")
         
         limit = IntPrompt.ask(
             "처리할 파일 수를 입력하세요 (Enter number of files to process, 0 = all)",
@@ -316,6 +509,13 @@ class InteractiveMenu:
         results = collector.run(limit=limit)
         console.print(f"✅ {results['success']}/{results['total']} 파일 메타데이터 수집 완료")
         console.print(f"[dim]Collected metadata for {results['success']}/{results['total']} files[/dim]")
+        
+        # Stage 4
+        console.print("\n[bold blue]✂️  Stage 4: 챕터 분할 (Chapter Splitting)[/bold blue]")
+        splitter = ChapterSplitRunner(self.db)
+        results = splitter.run(limit=limit)
+        console.print(f"✅ {results['success']}/{results['total']} 파일 챕터 분할 완료")
+        console.print(f"[dim]Split {results['success']}/{results['total']} files into chapters[/dim]")
         
         # Stage 2
         console.print("\n[bold blue]🔢 Stage 2: 화수 검증 (Episode Verification)[/bold blue]")
@@ -353,8 +553,8 @@ class InteractiveMenu:
                 
                 choice = Prompt.ask(
                     "\n선택하세요 (Choose an option)",
-                    choices=["0", "1", "2", "3", "4", "5", "6", "7"],
-                    default="7"
+                    choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+                    default="8"
                 )
                 
                 if choice == "0":
@@ -365,15 +565,19 @@ class InteractiveMenu:
                 elif choice == "2":
                     self.run_stage1()
                 elif choice == "3":
-                    self.run_stage2()
+                    self.run_stage4()
                 elif choice == "4":
-                    self.run_stage3()
+                    self.run_stage2()
                 elif choice == "5":
-                    self.run_stage5()
+                    self.run_stage3()
                 elif choice == "6":
-                    self.run_pipeline()
+                    self.run_stage5()
                 elif choice == "7":
-                    continue  # 상태는 이미 표시됨
+                    self.run_pipeline()
+                elif choice == "8":
+                    self.run_db_viewer()
+                elif choice == "9":
+                    self.run_verification()
                 
                 console.print("\n" + "=" * 60)
                 input("\n계속하려면 Enter를 누르세요... (Press Enter to continue...)")

@@ -158,6 +158,17 @@ class GeminiClient:
             logger.error(f"Gemini API error: {e}")
             raise
     
+    def generate_content(self, prompt: str) -> str:
+        """Gemini API 호출 (일반 용도)
+        
+        Args:
+            prompt: 프롬프트
+        
+        Returns:
+            응답 텍스트
+        """
+        return self._call_api(prompt)
+    
     def extract_metadata_from_filename(self, filename: str, file_hash: str) -> NovelMetadata:
         """파일명에서 메타데이터 추출
         

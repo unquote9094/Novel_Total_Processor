@@ -7,10 +7,11 @@
 
 ## 📊 현재 상태
 
-### 🟢 열린 이슈 (10개)
+### 🟢 열린 이슈 (11개)
 
 | # | 제목 | 라벨 |
 |:---:|:---|:---:|
+| 11 | [기능] Stage 4 Chapter Splitting & Stage 2/5 Enhancement | enhancement |
 | 10 | [개선] 사용성 개선: 메뉴 TUI + 한글 메시지 | enhancement |
 | 9 | [기능] Phase E: Stage 6 + TUI + CLI (통합 파이프라인) | enhancement |
 | 8 | [기능] Phase D-2: Stage 5 EPUB 생성 (EbookLib + 메타데이터) | enhancement |
@@ -24,4 +25,4 @@
 
 ---
 
-> **마지막 동기화**: 2026-02-11 23:49:54
+> **마지막 동기화**: 2026-02-12 18:08:12

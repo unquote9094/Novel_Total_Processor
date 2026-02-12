@@ -112,7 +112,7 @@ class EpisodePatternDetector:
         logger.info("EpisodePatternDetector initialized")
     
     def get_pending_files(self, limit: Optional[int] = None) -> list:
-        """Stage 2 대기 중인 파일 조회
+        """Stage 2 대기 중인 파일 조회 (Stage 4 완료 파일)
         
         Args:
             limit: 최대 파일 수
@@ -123,11 +123,12 @@ class EpisodePatternDetector:
         conn = self.db.connect()
         cursor = conn.cursor()
         
+        # Stage 4 완료, Stage 2 미완료 파일
         query = """
             SELECT f.id, f.file_path, f.file_hash, f.encoding
             FROM files f
             JOIN processing_state ps ON f.id = ps.file_id
-            WHERE ps.stage1_meta = 1 AND ps.stage2_episode = 0
+            WHERE ps.stage4_split = 1 AND ps.stage2_episode = 0
             AND f.is_duplicate = 0 AND f.file_ext = '.txt'
         """
         
@@ -192,7 +193,7 @@ class EpisodePatternDetector:
             logger.warning(f"Cache write failed: {e}")
     
     def detect_pattern(self, file_id: int, file_path: str, file_hash: str, encoding: Optional[str]) -> Dict[str, Any]:
-        """화수 패턴 감지
+        """화수 패턴 감지 (Stage 4 결과 활용)
         
         Args:
             file_id: 파일 ID
@@ -203,28 +204,51 @@ class EpisodePatternDetector:
         Returns:
             {"pattern_regex": str, "detected_start": int, "detected_end": int, "confidence": float}
         """
-        # 캐시 확인
-        cached = self._load_from_cache(file_hash)
-        if cached:
-            return cached
+        # Stage 4 캐시 확인
+        stage4_cache = Path("data/cache/chapter_split") / f"{file_hash}.json"
         
-        # 파일 샘플링
-        logger.debug(f"Sampling file: {Path(file_path).name}")
-        head_text, tail_text = self.sampler.sample_file(file_path, encoding)
+        if not stage4_cache.exists():
+            logger.warning(f"Stage 4 cache not found: {file_hash[:8]}... - Skipping")
+            return {
+                "pattern_regex": "",
+                "detected_start": 1,
+                "detected_end": 1,
+                "confidence": 0.0
+            }
         
-        # AI 프롬프트 생성
-        prompt = self._build_pattern_prompt(head_text, tail_text)
+        # Stage 4 결과 로드
+        try:
+            with open(stage4_cache, "r", encoding="utf-8") as f:
+                stage4_data = json.load(f)
+            
+            summary = stage4_data.get("summary", {})
+            patterns = stage4_data.get("patterns", {})
+            
+            # 본편 화수 범위 추출
+            main_info = summary.get("본편", {})
+            start = main_info.get("start", 1)
+            end = main_info.get("end", 1)
+            
+            # 패턴 정규식
+            pattern_regex = patterns.get("chapter_pattern", "")
+            
+            logger.info(f"   ✅ Stage 4 결과 활용: 본편 {start}~{end}화")
+            
+            return {
+                "pattern_regex": pattern_regex,
+                "detected_start": start,
+                "detected_end": end,
+                "confidence": 1.0  # Stage 4 결과는 신뢰도 100%
+            }
         
-        # Gemini API 호출
-        response_text = self.gemini._call_api(prompt)
-        
-        # 응답 파싱
-        pattern_data = self._parse_pattern_response(response_text)
-        
-        # 캐시 저장
-        self._save_to_cache(file_hash, pattern_data)
-        
-        return pattern_data
+        except Exception as e:
+            logger.error(f"Failed to load Stage 4 cache: {e}")
+            return {
+                "pattern_regex": "",
+                "detected_start": 1,
+                "detected_end": 1,
+                "confidence": 0.0
+            }
     
     def _build_pattern_prompt(self, head_text: str, tail_text: str) -> str:
         """화수 패턴 감지 프롬프트 생성
