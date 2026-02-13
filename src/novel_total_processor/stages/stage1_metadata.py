@@ -11,6 +11,7 @@ from novel_total_processor.db.schema import Database
 from novel_total_processor.ai.gemini_client import GeminiClient, NovelMetadata
 from novel_total_processor.ai.perplexity_client import PerplexityClient
 from novel_total_processor.config.loader import get_config
+from novel_total_processor.utils.text_cleaner import clean_search_title, extract_episode_range_numeric
 
 logger = get_logger(__name__)
 
@@ -28,6 +29,184 @@ class MetadataCollector:
         self.gemini = GeminiClient()
         self.perplexity = PerplexityClient()
         logger.info("MetadataCollector initialized")
+    
+    def _check_metadata_sufficient(self, metadata: Optional[NovelMetadata]) -> bool:
+        """메타데이터가 최소 성공 기준을 만족하는지 확인
+        
+        최소 성공 기준: title + author + genre 중 2개 이상 존재
+        
+        Args:
+            metadata: 검증할 메타데이터
+        
+        Returns:
+            충분한 정보가 있으면 True, 아니면 False
+        """
+        if not metadata:
+            return False
+        
+        # title은 항상 있다고 가정 (파일명에서 최소한 추출)
+        # author, genre 중 최소 1개 이상 있어야 함
+        has_title = True  # 파일명에서 최소한 제목은 추출됨
+        has_author = bool(metadata.author and metadata.author.strip() and "Unknown" not in metadata.author)
+        has_genre = bool(metadata.genre and metadata.genre.strip() and "Unknown" not in metadata.genre)
+        
+        # title + (author or genre) 조합이면 충분
+        count = sum([has_title, has_author, has_genre])
+        
+        if count >= 2:
+            return True
+        
+        logger.debug(f"   Insufficient metadata: author={has_author}, genre={has_genre}")
+        return False
+    
+    def _merge_metadata(self, base: NovelMetadata, extra: Dict[str, Any]) -> NovelMetadata:
+        """메타데이터 병합 (개선된 로직)
+        
+        병합 우선순위:
+        1. 더 큰 episode_range 값 우선
+        2. 더 최신 last_updated 값 우선
+        3. 플랫폼 우선순위 (노벨피아, 네이버 시리즈, 리디, 네이버 웹소설, 카카오, 문피아, 조아라)
+        
+        Args:
+            base: 기본 메타데이터 (Gemini 결과)
+            extra: 추가 정보 (Perplexity 결과)
+        
+        Returns:
+            병합된 메타데이터
+        """
+        # 플랫폼 우선순위 정의
+        priority_platforms = [
+            "노벨피아",
+            "네이버 시리즈",
+            "리디",
+            "네이버 웹소설",
+            "카카오",
+            "문피아",
+            "조아라"
+        ]
+        
+        def get_platform_priority(platform: Optional[str]) -> int:
+            """플랫폼 우선순위 점수 반환 (낮을수록 우선)"""
+            if not platform:
+                return 999
+            for i, p in enumerate(priority_platforms):
+                if p in platform:
+                    return i
+            return 900  # 기타 플랫폼
+        
+        def is_newer(d1: Optional[str], d2: Optional[str]) -> bool:
+            """날짜 비교 (d1이 d2보다 최신이면 True)"""
+            if not d1:
+                return False
+            if not d2:
+                return True
+            return d1 > d2
+        
+        # 에피소드 범위 비교
+        base_ep_num = extract_episode_range_numeric(base.episode_range)
+        extra_ep_num = extract_episode_range_numeric(extra.get("episode_range"))
+        
+        # 플랫폼 우선순위 비교
+        base_priority = get_platform_priority(base.platform)
+        extra_priority = get_platform_priority(extra.get("platform"))
+        
+        # 날짜 비교
+        extra_is_newer = is_newer(extra.get("last_updated"), base.last_updated)
+        
+        # 병합 로직
+        logger.info("   [Merge Decision]")
+        
+        # 제목: Perplexity가 우선순위 플랫폼이거나 더 최신일 경우 채택
+        if extra.get("title"):
+            if extra_priority < base_priority or extra_is_newer or (base.title and base.title.startswith("#")):
+                logger.info(f"     → Title: Using Perplexity result (priority or newer)")
+                base.title = extra["title"]
+        
+        # 작가: 없거나 Perplexity가 우선일 경우
+        if extra.get("author"):
+            if not base.author or extra_priority < base_priority or extra_is_newer:
+                if base.author != extra["author"]:
+                    logger.info(f"     → Author: '{base.author}' → '{extra['author']}' (priority or newer)")
+                base.author = extra["author"]
+        
+        # 장르: 병합 (통합)
+        if extra.get("genre"):
+            if base.genre and base.genre != extra["genre"]:
+                genres = {g.strip() for g in (base.genre + "," + extra["genre"]).split(",") if g.strip()}
+                merged_genre = ", ".join(sorted(genres))
+                logger.info(f"     → Genre: Merged '{base.genre}' + '{extra['genre']}' = '{merged_genre}'")
+                base.genre = merged_genre
+            elif not base.genre:
+                base.genre = extra["genre"]
+        
+        # 상태: '완결'은 무조건 우선, 그 외는 최신 정보 우선
+        if extra.get("status"):
+            if "완결" in str(extra["status"]) or "완결" in str(base.status):
+                base.status = "완결"
+                logger.info(f"     → Status: '완결' (prioritized)")
+            elif not base.status or extra_is_newer:
+                base.status = extra["status"]
+        
+        # 에피소드 범위: 더 큰 값 우선, 같으면 최신 정보 우선
+        if extra.get("episode_range"):
+            if base_ep_num and extra_ep_num:
+                if extra_ep_num > base_ep_num:
+                    logger.info(f"     → Episode Range: {base.episode_range} → {extra['episode_range']} (larger)")
+                    base.episode_range = extra["episode_range"]
+                elif extra_ep_num == base_ep_num and extra_is_newer:
+                    logger.info(f"     → Episode Range: {base.episode_range} → {extra['episode_range']} (same, but newer)")
+                    base.episode_range = extra["episode_range"]
+            elif not base.episode_range or extra_is_newer:
+                base.episode_range = extra["episode_range"]
+        
+        # 날짜: 최신 정보 사용
+        if extra_is_newer:
+            logger.info(f"     → Last Updated: {base.last_updated} → {extra['last_updated']} (newer)")
+            base.last_updated = extra["last_updated"]
+        
+        # 플랫폼: 우선순위가 높으면 교체
+        if extra_priority < base_priority:
+            logger.info(f"     → Platform: '{base.platform}' → '{extra['platform']}' (higher priority)")
+            base.platform = extra["platform"]
+        
+        # 평점: 더 높은 평점 우선, 거의 같으면 최신 정보
+        extra_rating = extra.get("rating")
+        if extra_rating and extra_rating > 0:
+            if not base.rating or extra_rating > base.rating:
+                logger.info(f"     → Rating: {base.rating} → {extra_rating} (higher)")
+                base.rating = extra_rating
+            elif extra_is_newer and abs(extra_rating - base.rating) < 0.1:
+                base.rating = extra_rating
+        
+        # 표지: 우선순위 플랫폼이거나 최신일 경우
+        if extra.get("cover_url"):
+            if not base.cover_url or extra_priority < base_priority or extra_is_newer:
+                logger.info(f"     → Cover: Using Perplexity result")
+                base.cover_url = extra["cover_url"]
+        
+        # 태그: 병합 및 성인물 판별
+        if extra.get("tags"):
+            all_tags = set(base.tags or []) | set(extra["tags"])
+            
+            # 성인물 판별
+            adult_keywords = ["성인", "19금", "야겜", "R19", "노블레스", "성인물"]
+            is_adult = any(kw in str(all_tags) for kw in adult_keywords)
+            if is_adult:
+                if not base.genre:
+                    base.genre = "성인물"
+                elif "성인물" not in base.genre:
+                    base.genre = "성인물, " + base.genre
+            
+            merged_tags_count = len(all_tags)
+            logger.info(f"     → Tags: Merged ({merged_tags_count} total tags)")
+            base.tags = list(all_tags)[:15]
+        
+        # 공식 URL: 없으면 추가
+        if extra.get("source_url") and not base.official_url:
+            logger.info(f"     → Official URL: {extra['source_url']}")
+            base.official_url = extra["source_url"]
+        
+        return base
     
     def get_pending_files(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """Stage 1 대기 중인 파일 조회
@@ -82,129 +261,53 @@ class MetadataCollector:
                 logger.info(f"   [AI 1/2] Gemini searching (Attempt {attempt}/3): {filename}")
                 metadata = self.gemini.extract_metadata_from_filename(filename, file_hash)
                 
-                # 충분한 정보를 얻었는지 확인 (제목 외에 작가, 장르, 태그 중 하나라도 있는 경우)
-                if metadata and metadata.title and (metadata.author or metadata.genre or metadata.tags):
-                    logger.info("   ✅ Gemini search successful (info found)")
+                # 충분한 정보를 얻었는지 확인
+                if self._check_metadata_sufficient(metadata):
+                    logger.info("   ✅ Gemini search successful (sufficient info found)")
                     logger.info(f"      - Title: {metadata.title}")
                     logger.info(f"      - Author: {metadata.author}")
                     logger.info(f"      - Genre: {metadata.genre}")
                     logger.info(f"      - Rating: {metadata.rating}")
                     logger.info(f"      - Status: {metadata.status}")
                     logger.info(f"      - Tags: {', '.join(metadata.tags) if metadata.tags else '[]'}")
-                    logger.info(f"      - Official URL: {metadata.official_url}")
+                    if metadata.official_url:
+                        logger.info(f"      - Official URL: {metadata.official_url}")
                     break
                 else:
-                    logger.warning(f"   ⚠️ Gemini result insufficient. {'Retrying...' if attempt < 3 else 'Giving up.'}")
+                    logger.warning(f"   ⚠️ Gemini result insufficient (missing author or genre). {'Retrying with variant query...' if attempt < 3 else 'Giving up.'}")
                     if attempt < 3:
                         time.sleep(1)
             
             # 2. Perplexity로 보조 검색 (최대 3회 재시도)
             extra_info = None
-            if self.perplexity.enabled and metadata.title:
+            if self.perplexity.enabled and metadata and metadata.title:
+                # 정리된 제목 사용
+                search_title = clean_search_title(metadata.title)
+                
                 for attempt in range(1, 4):
-                    logger.info(f"   [AI 2/2] Perplexity searching (Attempt {attempt}/3): {metadata.title}")
-                    extra_info = self.perplexity.search_novel_info(metadata.title, metadata.author)
+                    logger.info(f"   [AI 2/2] Perplexity searching (Attempt {attempt}/3): {search_title}")
+                    extra_info = self.perplexity.search_novel_info(search_title, metadata.author)
                     
                     # 제목 외에 다른 유의미한 정보가 있는지 확인
                     if extra_info and (extra_info.get("author") or extra_info.get("genre") or extra_info.get("rating")):
                         logger.info("   ✅ Perplexity search successful (info found)")
                         break
                     else:
-                        logger.warning(f"   ⚠️ Perplexity result insufficient. {'Retrying...' if attempt < 3 else 'Giving up.'}")
+                        logger.warning(f"   ⚠️ Perplexity result insufficient. {'Retrying with variant query...' if attempt < 3 else 'Giving up.'}")
                         if attempt < 3:
                             time.sleep(1)
             
             # 3. 데이터 병합 (Merge) - 고도화 버전
-            # 원칙: 1) 우선순위 플랫폼 정보优先, 2) 날짜가 더 최신인 정보优先
             if extra_info:
-                # 헬퍼: 날짜 비교
-                def is_newer(d1: Optional[str], d2: Optional[str]) -> bool:
-                    if not d1: return False
-                    if not d2: return True
-                    # YYYY-MM-DD 포맷 가정
-                    return d1 > d2
-
-                # 헬퍼: 우선순위 사이트 여부
-                priority_sites = ["노벨피아", "문피아", "조아라", "리디", "카카오", "네이버", "블라이스", "원스토리"]
-                def has_priority(p: Optional[str]) -> bool:
-                    if not p: return False
-                    return any(s in p for s in priority_sites)
-
-                # 병합 결정 로직 (Base: Gemini, Extra: Perplexity)
-                p_newer = is_newer(extra_info.get("last_updated"), metadata.last_updated)
-                p_priority = has_priority(extra_info.get("platform"))
-                g_priority = has_priority(metadata.platform)
-
-                # 0) 제목: Perplexity가 공식 사이트(우선순위) 제목을 찾았거나 더 최신일 경우 채택
-                if extra_info.get("title") and (p_priority or p_newer or metadata.title.startswith("#")):
-                    metadata.title = extra_info["title"]
-
-                # 1) 작가, 장르: Gemini가 못 찾았거나 Perplexity가 우선순위/최신일 경우
-                if extra_info.get("author") and (not metadata.author or p_priority or p_newer):
-                    metadata.author = extra_info["author"]
-                
-                # M-42: 장르 병합 (하나만 택하지 않고 통합)
-                if extra_info.get("genre"):
-                    if metadata.genre and metadata.genre != extra_info["genre"]:
-                        genres = {g.strip() for g in (metadata.genre + "," + extra_info["genre"]).split(",") if g.strip()}
-                        metadata.genre = ", ".join(sorted(genres))
-                    else:
-                        metadata.genre = extra_info["genre"]
-
-                # 2) 상태, 화수: 최신 정보(날짜)가 가장 중요하되, '완결'은 무조건 우선
-                p_status = extra_info.get("status")
-                if p_status:
-                    if "완결" in str(p_status) or "완결" in str(metadata.status):
-                        metadata.status = "완결"
-                    elif not metadata.status or p_newer:
-                        metadata.status = p_status
-                
-                if extra_info.get("episode_range") and (not metadata.episode_range or p_newer):
-                    metadata.episode_range = extra_info["episode_range"]
-                
-                # 3) 날짜 및 플랫폼 업데이트
-                if p_newer:
-                    metadata.last_updated = extra_info["last_updated"]
-                if p_priority:
-                    metadata.platform = extra_info["platform"]
-
-                # 4) 별점: 더 높은 평점을 우선 보존 (정보 소실 방지)
-                p_rating = extra_info.get("rating")
-                if p_rating and p_rating > 0:
-                    if not metadata.rating or p_rating > metadata.rating:
-                        metadata.rating = p_rating
-                    elif p_newer and abs(p_rating - metadata.rating) < 0.1: # 거의 같으면 최신 정보 반영
-                         metadata.rating = p_rating
-
-                # 5) 표지: 최신이거나 우선순위 사이트 것 우선
-                if extra_info.get("cover_url") and (not metadata.cover_url or p_priority or p_newer):
-                    metadata.cover_url = extra_info["cover_url"]
-
-                # 6) 태그: 병합 및 성인물 판별 (M-42)
-                if extra_info.get("tags"):
-                    all_tags = set(metadata.tags or []) | set(extra_info["tags"])
-                    
-                    # 성인물 판별 키워드
-                    adult_keywords = ["성인", "19금", "야겜", "R19", "노블레스", "성인물"]
-                    is_adult = any(kw in str(all_tags) for kw in adult_keywords)
-                    if is_adult:
-                        if not metadata.genre: metadata.genre = "성인물"
-                        elif "성인물" not in metadata.genre:
-                            metadata.genre = "성인물, " + metadata.genre
-                            
-                    metadata.tags = list(all_tags)[:15] # 태그 수 약간 확장
-
-                # 7) 공식 URL 병합 (M-49)
-                if extra_info.get("source_url") and not metadata.official_url:
-                    metadata.official_url = extra_info["source_url"]
-
+                metadata = self._merge_metadata(metadata, extra_info)
+            
             # 3.5 구글 이미지 검색 보강 (표지가 없거나 저화질일 경우)
             if not metadata.cover_url or "novelpia_books_icon" in metadata.cover_url:
                 logger.info(f"   🔍 Cover missing or low quality. Trying dedicated Google Image search...")
                 # Gemini의 Google Search Grounding을 다시 활용하여 전용 이미지 쿼리 실행
                 img_prompt = f'"{metadata.title}" {metadata.author or ""} 소설 공식 단행본 표지 이미지 고화질 direct image url format'
                 img_metadata = self.gemini.extract_metadata_from_filename(img_prompt, f"img_{file_hash}")
-                if img_metadata.cover_url and "novelpia_books_icon" not in img_metadata.cover_url:
+                if img_metadata and img_metadata.cover_url and "novelpia_books_icon" not in img_metadata.cover_url:
                     metadata.cover_url = img_metadata.cover_url
                     logger.info(f"   ✅ Found better cover via Google search: {metadata.cover_url}")
             
@@ -225,11 +328,10 @@ class MetadataCollector:
             logger.info(f"     • Updated: {metadata.last_updated}")
             logger.info(f"     • Tags: {', '.join(metadata.tags) if metadata.tags else '[]'}")
             logger.info(f"     • Status: {metadata.status}")
-            logger.info(f"     • Official URL: {metadata.official_url}")
+            if metadata.official_url:
+                logger.info(f"     • Official URL: {metadata.official_url}")
             logger.info(f"     • Cover: {'[Success]' if cover_path else '[No/Failed]'}")
             
-            # DB 정보 업데이트 (platform, last_updated 등은 novel_extra 또는 기존 테이블 확장 필요하나 현재는 로그 출력 위주)
-
             # M-46: 파일명 힌트 강제 동기화 (AI가 놓쳤을 경우 대비)
             self._apply_filename_hints(metadata, filename)
             
