@@ -79,6 +79,30 @@ class PatternManager:
             
         return (pattern, None)
     
+
+    def _analyze_gap_pattern(self, sample_text: str, current_pattern: str) -> Optional[str]:
+        """[Hotfix v7] 누락 구간 전용 정밀 분석 (Context-Aware)"""
+        prompt = f"""=== pattern_refinement ===
+You are an expert in Regex. We are trying to split a novel into chapters.
+We already have a pattern: `{current_pattern}`
+However, we missed some chapters in the following text chunk.
+
+[Tasks]
+1. Analyze the text and find the Chapter Title pattern used inside this specific chunk.
+2. It might be slightly different from the existing pattern (e.g., "1화" vs "Chapter 1").
+3. Create a Python Regex for this NEW pattern.
+   - **DO NOT** return the existing pattern again.
+   - **DO NOT** match general sentences or page numbers.
+   - **ONLY** match headlines that look like chapter titles.
+
+[Text Chunk (Missed Area)]
+{sample_text[:30000]}
+
+[Output]
+Return ONLY the raw Regex string. No markdown.
+"""
+        return self._generate_regex_from_ai(prompt)
+
     def _analyze_pattern_v3(self, sample_text: str) -> Optional[str]:
         """NovelAIze-SSR v3.0 원본 프롬프트 복원"""
         prompt = f"""=== pattern_analysis ===
@@ -91,13 +115,17 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
    If the novel uses multiple formats (e.g., some chapters use "1화", while others use "Chapter 1" or "Ep.1"), identify ALL of them.
 2. Create a Python Compatible Regular Expression (Regex) to match these chapter titles.
    - Use the `|` (OR) operator to combine multiple patterns if necessary.
-   - Use `\s*` for flexible whitespace and `\d+` for numbers.
+   - Use `\\s*` for flexible whitespace and `\\d+` for numbers.
 3. OUTPUT ONLY the raw Regex string. No markdown, no content.
    - If no pattern found, return "NO_PATTERN_FOUND".
 
 [Novel Text Samples]
 {sample_text[:30000]}
 """
+        return self._generate_regex_from_ai(prompt)
+
+    def _generate_regex_from_ai(self, prompt: str) -> Optional[str]:
+        """AI 응답 처리 공통 로직"""
         try:
             response = self.client.generate_content(prompt)
             # 마크다운 및 불필요 텍스트 정제
@@ -184,7 +212,8 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
             for gap in gaps:
                 sample = self.sampler.extract_samples_from(target_file, gap['start'], length=30000, encoding=encoding)
                 if not sample: continue
-                new_p = self._analyze_pattern_v3(sample)
+                # [Hotfix v7] 문맥 인지형 프롬프트 사용
+                new_p = self._analyze_gap_pattern(sample, best_pattern)
                 if new_p:
                     test_p = f"{best_pattern}|{new_p}"
                     test_s = self.splitter.verify_pattern(target_file, test_p, encoding=encoding)
