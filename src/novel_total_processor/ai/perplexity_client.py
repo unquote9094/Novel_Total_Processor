@@ -111,23 +111,43 @@ class PerplexityClient:
             logger.error(f"Search failed: {e}")
             return []
     
-    def search_novel_info(self, title: str, author: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """소설 정보 상세 검색 (Chat API + Online Model)"""
+    def search_novel_info(self, title: str, author: Optional[str] = None, retry_count: int = 0) -> Optional[Dict[str, Any]]:
+        """소설 정보 상세 검색 (Search API → Chat API + Online Model)
+        
+        Args:
+            title: 검색할 소설 제목
+            author: 작가명 (선택)
+            retry_count: 재시도 횟수 (내부 사용)
+        
+        Returns:
+            메타데이터 딕셔너리 또는 None
+        """
         if not self.enabled:
             return None
         
+        # 1단계: Search API로 공식 URL 후보 수집
+        official_urls = self._search_official_urls(title, author)
+        
+        # 2단계: Chat API로 상세 정보 추출 (공식 URL 컨텍스트 포함)
         url = "https://api.perplexity.ai/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
         
+        # 공식 URL 힌트 구성
+        url_hint = ""
+        if official_urls:
+            url_hint = f"\n\n공식 페이지 후보:\n" + "\n".join(f"- {u}" for u in official_urls[:3])
+            logger.info(f"   📍 Official URL candidates found: {len(official_urls)}")
+        
         system_prompt = "You are a helpful assistant. Search for the novel info. Output valid JSON only."
         user_prompt = f"""
 Search for the Korean web novel "{title}"{f' by {author}' if author else ''}.
-1. First, find its OFFICIAL and LATEST detail page URL from platforms like Ridi, KakaoPage, Naver Series, Novelpia, Munpia, Joara.
+1. First, find its OFFICIAL and LATEST detail page URL from platforms like 노벨피아, 네이버 시리즈, 리디, 네이버 웹소설, 카카오페이지, 문피아, 조아라.
 2. Extract info from that official page.
 3. Find its official title, author, rating (out of 10.0), genre, tags, status, episode range, last updated date, and cover image URL.
+{url_hint}
 
 Response Format (JSON):
 {{
@@ -148,6 +168,7 @@ RULES:
 1. **ALWAYS translate genre, tags, and status into Korean.**
 2. **DO NOT provide site logos (e.g., logo.svg, icon) or default images as a cover_url.** Only actual book covers.
 3. **source_url MUST be the official detail page URL.**
+4. **Prefer information from 노벨피아, 네이버 시리즈, or 리디 platforms when available.**
 """
         
         payload = {
@@ -188,12 +209,61 @@ RULES:
             logger.info(f"       - Episodes: {data.get('episode_range')}")
             logger.info(f"       - Platform: {data.get('platform')}")
             logger.info(f"       - Updated: {data.get('last_updated')}")
-            logger.info(f"       - Source: {data.get('source_url')}")
+            if data.get('source_url'):
+                logger.info(f"       - Official URL: {data.get('source_url')}")
             
             return data
         except Exception as e:
             logger.error(f"Perplexity Deep Search failed: {e}")
             return None
+    
+    def _search_official_urls(self, title: str, author: Optional[str] = None) -> List[str]:
+        """Perplexity Search API로 공식 URL 후보 수집
+        
+        Args:
+            title: 소설 제목
+            author: 작가명 (선택)
+        
+        Returns:
+            공식 URL 리스트
+        """
+        if not self.enabled:
+            return []
+        
+        # 우선순위 플랫폼 도메인
+        priority_domains = [
+            "novelpia.com",
+            "series.naver.com",
+            "ridibooks.com",
+            "novel.naver.com",
+            "page.kakao.com",
+            "munpia.com",
+            "joara.com"
+        ]
+        
+        # 검색 쿼리 구성
+        query = f"{title} 소설"
+        if author:
+            query += f" {author}"
+        query += " 공식 페이지"
+        
+        try:
+            results = self.search(query, max_results=10)
+            
+            # 우선순위 도메인에서 URL 추출
+            official_urls = []
+            for result in results:
+                url = result.url
+                if any(domain in url for domain in priority_domains):
+                    official_urls.append(url)
+            
+            if official_urls:
+                logger.debug(f"Found {len(official_urls)} official URLs via Search API")
+            
+            return official_urls
+        except Exception as e:
+            logger.debug(f"Search API failed: {e}")
+            return []
 
     def download_cover(self, cover_url: str, novel_id: int) -> Optional[str]:
         """표지 이미지 다운로드 (Hotfix: SVG/ICO 필터링 포함)"""

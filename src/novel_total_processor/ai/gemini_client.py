@@ -15,6 +15,7 @@ from google.genai import types
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from novel_total_processor.utils.logger import get_logger
 from novel_total_processor.config.loader import get_config
+from novel_total_processor.utils.text_cleaner import clean_search_title
 
 logger = get_logger(__name__)
 
@@ -153,11 +154,15 @@ class GeminiClient:
     
     def extract_metadata_from_filename(self, filename: str, file_hash: str) -> Optional[NovelMetadata]: # Return type changed
         """파일명에서 메타데이터 추출"""
+        # 제목 정리
+        cleaned_title = clean_search_title(filename)
+        
         # 프롬프트 생성
-        prompt = self._build_metadata_prompt(filename)
+        prompt = self._build_metadata_prompt(cleaned_title)
         
         # API 호출
         logger.info(f"🔍 Gemini Analysis: {filename}")
+        logger.debug(f"   Cleaned search title: {cleaned_title}")
         response_text = self._call_api(prompt)
         
         if not response_text:
