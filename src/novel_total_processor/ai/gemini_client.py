@@ -167,9 +167,6 @@ class GeminiClient:
         # 응답 파싱
         metadata = self._parse_metadata_response(response_text, filename)
         
-        # 캐시 저장
-        self._save_to_cache(file_hash, metadata.__dict__)
-        
         return metadata
     
     def _build_metadata_prompt(self, filename: str) -> str:
