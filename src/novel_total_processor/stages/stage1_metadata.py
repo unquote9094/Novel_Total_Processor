@@ -85,6 +85,10 @@ class MetadataCollector:
                 # 충분한 정보를 얻었는지 확인 (제목 외에 작가, 장르, 태그 중 하나라도 있는 경우)
                 if metadata and metadata.title and (metadata.author or metadata.genre or metadata.tags):
                     logger.info("   ✅ Gemini search successful (info found)")
+                    logger.info(f"      - Title: {metadata.title}")
+                    logger.info(f"      - Author: {metadata.author}")
+                    logger.info(f"      - Rating: {metadata.rating}")
+                    logger.info(f"      - Status: {metadata.status}")
                     break
                 else:
                     logger.warning(f"   ⚠️ Gemini result insufficient. {'Retrying...' if attempt < 3 else 'Giving up.'}")
