@@ -134,11 +134,11 @@ class GeminiClient:
                 model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    max_output_tokens=2048, # 응답 끊김 방지 (2048로 확장)
-                    # Google Search Grounding 활성화 (진짜 웹 검색)
+                    temperature=0.0, # 결정론적 응답을 위해 0으로 고정
+                    max_output_tokens=2048,
+                    # Google Search Grounding 활성화
                     tools=[types.Tool(google_search=types.GoogleSearch())],
-                    response_mime_type="application/json" # JSON 응답 강제
+                    # response_mime_type="application/json"  # [Hotfix v3] Grounding과의 충돌 방지를 위해 주석 처리
                 )
             )
             return response.text
@@ -193,21 +193,34 @@ class GeminiClient:
 2. **찾은 공식 상세 페이지의 정보를 기반으로 정확한 데이터를 추출하십시오.**
 3. **official_url 필드에는 당신이 실제 방문한 소설 상세 페이지 URL을 반드시 기입하십시오.**
 4. **표지 이미지는 공식 일러스트 URL을 찾되, 사이트 로고(logo), 아이콘(icon), 혹은 기본 이미지(svg, default, ico)는 절대 기입하지 마십시오.**
-5. **반드시 서론이나 설명 없이 { 로 시작하여 } 로 끝나는 순수 JSON 데이터만 출력하십시오. 응답이 잘리지 않도록 핵심 정보 위주로 간결하게 작성하십시오.**
+5. **응답은 반드시 아래 JSON 형식을 포함해야 합니다. JSON 블록은 ```json 으로 시작하고 ``` 로 끝내십시오.**
 6. **모든 정보는 반드시 한국어로 번역하십시오.** (장르, 태그, 상태 등)
 """
     
     def _parse_metadata_response(self, response_text: str, filename: str) -> NovelMetadata:
         """응답 파싱"""
         try:
-            json_text = response_text.strip()
-            if json_text.startswith("```"):
-                parts = json_text.split("```")
-                json_text = parts[1]
-                if json_text.startswith("json"):
-                    json_text = json_text[4:]
+            # [Hotfix v3] 정규식을 사용한 더 유연한 JSON 블록 추출
+            import re
             
-            data = json.loads(json_text.strip())
+            # 1. 마크다운 JSON 블록 시도
+            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+            if json_match:
+                json_text = json_match.group(1)
+            else:
+                # 2. 가장 바깥쪽 { } 블록 찾기 시도
+                json_match = re.search(r'(\{.*\})', response_text, re.DOTALL)
+                if json_match:
+                    json_text = json_match.group(1)
+                else:
+                    json_text = response_text.strip()
+            
+            # 3. 끊긴 JSON 복구 시도 (장애 방어)
+            if json_text.count('{') > json_text.count('}'):
+                # 닫는 중괄호가 부족하면 강제로 닫아줌 (끊김 발생 시 최소한의 파싱 보장)
+                json_text += '}' * (json_text.count('{') - json_text.count('}'))
+            
+            data = json.loads(json_text)
             
             return NovelMetadata(
                 title=data.get("title", filename),
