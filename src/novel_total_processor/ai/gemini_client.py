@@ -93,32 +93,7 @@ class GeminiClient:
             time.sleep(wait_time)
         self.last_call_time = time.time()
     
-    def _get_cache_path(self, file_hash: str) -> Path:
-        """캐시 파일 경로 반환"""
-        return self.cache_dir / f"{file_hash}.json"
-    
-    def _load_from_cache(self, file_hash: str) -> Optional[Dict[str, Any]]:
-        """캐시에서 로드"""
-        cache_path = self._get_cache_path(file_hash)
-        if cache_path.exists():
-            try:
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                logger.debug(f"Cache hit: {file_hash[:8]}...")
-                return data
-            except Exception as e:
-                logger.warning(f"Cache read failed: {e}")
-        return None
-    
-    def _save_to_cache(self, file_hash: str, data: Dict[str, Any]) -> None:
-        """캐시에 저장"""
-        cache_path = self._get_cache_path(file_hash)
-        try:
-            with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            logger.debug(f"Cache saved: {file_hash[:8]}...")
-        except Exception as e:
-            logger.warning(f"Cache write failed: {e}")
+    # 캐시 기능 영구 삭제 (사용자 요청)
 
     @retry(
         stop=stop_after_attempt(3),
@@ -198,33 +173,35 @@ class GeminiClient:
         return metadata
     
     def _build_metadata_prompt(self, filename: str) -> str:
-        """메타데이터 추출 프롬프트 생성"""
-        return f"""다음 소설 파일명에서 메타데이터를 추출하세요.
+        """메타데이터 추출 프롬프트 생성 (Deep Search 강화)"""
+        return f"""당신은 소설 메타데이터 전문가입니다. 다음 파일명에서 소설의 정보를 구글 검색을 통해 상세히 찾아내십시오.
 
 파일명: {filename}
 
-다음 형식의 JSON으로 응답하세요:
+[수행 과제]
+1. **Google 검색 도구를 반드시 사용**하여 이 소설의 최신 공식 상세 페이지(리디, 카카오, 네이버, 노벨피아, 문피아, 조아라 등)를 찾으십시오.
+2. 공식 페이지에 적힌 **가장 정확하고 풍부한 정보**를 긁어오십시오.
+3. 특히 **장르, 작가, 평점, 그리고 가능한 한 많은 상세 태그(최소 5개 이상)**를 찾아내십시오.
+4. 공식 일러스트(표지) URL이 있다면 반드시 포함하십시오. (로고/아이콘 제외)
+
+[응답 형식: JSON ONLY]
 {{
   "title": "소설 제목",
-  "author": "작가명 (없으면 null)",
-  "genre": "장르 (판타지/로맨스/무협 등, 없으면 null)",
-  "tags": ["태그1", "태그2"],
+  "author": "작가명",
+  "genre": "장르 (예: 현대 판타지, 로맨스 판타지 등)",
+  "tags": ["태그1", "태그2", "태그3", "태그4", "태그5"],
   "status": "완결/연재/휴재",
-  "episode_range": "1~340화",
+  "episode_range": "총 화수 혹은 출판 권수",
   "rating": 0.0,
-  "cover_url": "공식 표지 이미지 URL (없으면 null)",
-  "platform": "공식 연재 플랫폼 명칭",
+  "platform": "최우선 연재 플랫폼 명칭",
   "last_updated": "최종 업데이트 날짜 YYYY-MM-DD",
-  "official_url": "당신이 정보를 추출한 가장 정확한 공식 상세 페이지 URL"
+  "official_url": "실제 방문한 공식 상세 페이지 주소",
+  "cover_url": "공식 표지 이미지 직접 링크"
 }}
 
-규칙:
-1. **Google 검색 도구를 사용하여 공식 상세 페이지 URL(리디, 카카오, 네이버, 노벨피아, 문피아 등)을 최우선으로 찾으십시오.**
-2. **찾은 공식 상세 페이지의 정보를 기반으로 정확한 데이터를 추출하십시오.**
-3. **official_url 필드에는 당신이 실제 방문한 소설 상세 페이지 URL을 반드시 기입하십시오.**
-4. **표지 이미지는 공식 일러스트 URL을 찾되, 사이트 로고(logo), 아이콘(icon), 혹은 기본 이미지(svg, default, ico)는 절대 기입하지 마십시오.**
-5. **응답은 반드시 아래 JSON 형식을 포함해야 합니다. JSON 블록은 ```json 으로 시작하고 ``` 로 끝내십시오.**
-6. **모든 정보는 반드시 한국어로 번역하십시오.** (장르, 태그, 상태 등)
+[주의사항]
+- 모든 텍스트는 **한국어**로 출력하십시오.
+- JSON 블록만 출력하십시오. (마크다운 포함)
 """
     
     def _parse_metadata_response(self, response_text: str, filename: str) -> NovelMetadata:

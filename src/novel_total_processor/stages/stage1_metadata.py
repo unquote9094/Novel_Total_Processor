@@ -87,8 +87,11 @@ class MetadataCollector:
                     logger.info("   ✅ Gemini search successful (info found)")
                     logger.info(f"      - Title: {metadata.title}")
                     logger.info(f"      - Author: {metadata.author}")
+                    logger.info(f"      - Genre: {metadata.genre}")
                     logger.info(f"      - Rating: {metadata.rating}")
                     logger.info(f"      - Status: {metadata.status}")
+                    logger.info(f"      - Tags: {', '.join(metadata.tags) if metadata.tags else '[]'}")
+                    logger.info(f"      - Official URL: {metadata.official_url}")
                     break
                 else:
                     logger.warning(f"   ⚠️ Gemini result insufficient. {'Retrying...' if attempt < 3 else 'Giving up.'}")
@@ -165,10 +168,13 @@ class MetadataCollector:
                 if p_priority:
                     metadata.platform = extra_info["platform"]
 
-                # 4) 별점: Perplexity 것이 유효(0.0 아님)하고 최신이거나 Gemini가 없을 때
+                # 4) 별점: 더 높은 평점을 우선 보존 (정보 소실 방지)
                 p_rating = extra_info.get("rating")
-                if p_rating and p_rating > 0 and (not metadata.rating or p_newer):
-                    metadata.rating = p_rating
+                if p_rating and p_rating > 0:
+                    if not metadata.rating or p_rating > metadata.rating:
+                        metadata.rating = p_rating
+                    elif p_newer and abs(p_rating - metadata.rating) < 0.1: # 거의 같으면 최신 정보 반영
+                         metadata.rating = p_rating
 
                 # 5) 표지: 최신이거나 우선순위 사이트 것 우선
                 if extra_info.get("cover_url") and (not metadata.cover_url or p_priority or p_newer):
