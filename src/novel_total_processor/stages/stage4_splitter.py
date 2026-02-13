@@ -433,7 +433,15 @@ class ChapterSplitRunner:
                 self.save_to_db(file_info["file_id"], result)
                 success_count += 1
             except Exception as e:
-                logger.error(f"Failed to split chapters: {e}")
+                logger.error(f"Failed to split chapters for {file_path_obj.name}: {e}")
+                # [Hotfix v2] 실패 시 기존 오염된 캐시가 있다면 삭제 (Stage 5 오염 방지)
+                cache_path = self.cache_dir / f"{file_info['file_hash']}.json"
+                if cache_path.exists():
+                    try:
+                        cache_path.unlink()
+                        logger.info(f"   🗑️  실패한 파일의 기존 캐시를 삭제했습니다.")
+                    except: pass
+                
                 failed_count += 1
         
         logger.info("=" * 50)

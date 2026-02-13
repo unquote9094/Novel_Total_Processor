@@ -137,7 +137,15 @@ class Splitter:
                 'tail_size': tail_size,
                 'coverage_ok': coverage_ok
             }
-        except: return {'match_count': 0, 'coverage_ok': False}
+        except Exception as e:
+            logger.error(f"Pattern verification error: {e}")
+            return {
+                'match_count': 0,
+                'last_match_pos': 0,
+                'last_match_ratio': 0.0,
+                'tail_size': total_size,
+                'coverage_ok': False
+            }
 
     def find_matches_with_pos(self, file_path: str, chapter_pattern: str, encoding: str = 'utf-8') -> list:
         matches = []

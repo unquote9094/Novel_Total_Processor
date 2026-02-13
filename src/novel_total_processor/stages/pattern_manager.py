@@ -51,14 +51,15 @@ class PatternManager:
         stats = self.splitter.verify_pattern(target_file, pattern, encoding=encoding)
         
         # v3.0 기준 99% 미달 시 정밀 추적 시작
-        if not stats['coverage_ok']:
-            logger.warning(f"   ⚠️ 패턴 커버리지 낮음 ({stats['last_match_ratio']*100:.1f}%). 정밀 추적(Plan C)을 시작합니다.")
+        if not stats.get('coverage_ok'):
+            cur_ratio = stats.get('last_match_ratio', 0)
+            logger.warning(f"   ⚠️ 패턴 커버리지 낮음 ({cur_ratio*100:.1f}%). 정밀 추적(Plan C)을 시작합니다.")
             pattern = self._run_adaptive_retry_v3(target_file, pattern, stats, encoding=encoding)
             stats = self.splitter.verify_pattern(target_file, pattern, encoding=encoding)
 
         # 4. Zero Tolerance (100% 일치 보정)
-        if expected_count > 0 and stats['match_count'] != expected_count:
-            logger.info(f"   🔄 [M-45] 화수 정합성 보정 중 ({stats['match_count']}/{expected_count})")
+        if expected_count > 0 and stats.get('match_count', 0) != expected_count:
+            logger.info(f"   🔄 [M-45] 화수 정합성 보정 중 ({stats.get('match_count')}/{expected_count})")
             pattern = self.refine_pattern_with_goal_v3(target_file, pattern, expected_count, encoding=encoding)
             
         return (pattern, None)
@@ -88,8 +89,18 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
             if "NO_PATTERN_FOUND" in result: return None
             # 줄바꿈이 있는 경우 첫 줄만 사용
             result = result.splitlines()[0] if result else None
+            
+            # [M-Hotfix] 정규식 유효성 사전 검증
+            if result:
+                try:
+                    re.compile(result)
+                except re.error as e:
+                    logger.error(f"   ❌ AI 생성 정규식 오류: {e} (Pattern: {result})")
+                    return None
             return result
-        except: return None
+        except Exception as e:
+            logger.error(f"   ❌ AI 분석 중 에러: {e}")
+            return None
 
     def _run_adaptive_retry_v3(self, target_file: str, current_pattern: str, verify_stats: dict, encoding: str = 'utf-8') -> str:
         """v3.0 정밀 추적 로직 (최대 10회)"""
@@ -114,10 +125,15 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
                 new_stats = self.splitter.verify_pattern(target_file, combined_pattern, encoding=encoding)
                 
                 # 조금이라도 나아지면 적용
-                if new_stats['last_match_ratio'] > stats['last_match_ratio'] or new_stats['tail_size'] < stats['tail_size']:
+                new_ratio = new_stats.get('last_match_ratio', 0)
+                old_ratio = stats.get('last_match_ratio', 0)
+                new_tail = new_stats.get('tail_size', 9999999)
+                old_tail = stats.get('tail_size', 9999999)
+
+                if new_ratio > old_ratio or new_tail < old_tail:
                     pattern = combined_pattern
                     stats = new_stats
-                    if stats['coverage_ok']:
+                    if stats.get('coverage_ok'):
                         logger.info(f"   ✨ [Plan C Success] 목표 커버리지 달성!")
                         break
                 else:
