@@ -46,11 +46,12 @@ class MetadataCollector:
         
         # title은 항상 있다고 가정 (파일명에서 최소한 추출)
         # author, genre 중 최소 1개 이상 있어야 함
+        has_title = True  # 파일명에서 최소한 제목은 추출됨
         has_author = bool(metadata.author and metadata.author.strip() and "Unknown" not in metadata.author)
         has_genre = bool(metadata.genre and metadata.genre.strip() and "Unknown" not in metadata.genre)
         
         # title + (author or genre) 조합이면 충분
-        count = sum([True, has_author, has_genre])  # title은 항상 True
+        count = sum([has_title, has_author, has_genre])
         
         if count >= 2:
             return True
@@ -117,7 +118,7 @@ class MetadataCollector:
         
         # 제목: Perplexity가 우선순위 플랫폼이거나 더 최신일 경우 채택
         if extra.get("title"):
-            if extra_priority < base_priority or extra_is_newer or base.title.startswith("#"):
+            if extra_priority < base_priority or extra_is_newer or (base.title and base.title.startswith("#")):
                 logger.info(f"     → Title: Using Perplexity result (priority or newer)")
                 base.title = extra["title"]
         
@@ -135,7 +136,7 @@ class MetadataCollector:
                 merged_genre = ", ".join(sorted(genres))
                 logger.info(f"     → Genre: Merged '{base.genre}' + '{extra['genre']}' = '{merged_genre}'")
                 base.genre = merged_genre
-            else:
+            elif not base.genre:
                 base.genre = extra["genre"]
         
         # 상태: '완결'은 무조건 우선, 그 외는 최신 정보 우선

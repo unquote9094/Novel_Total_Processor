@@ -154,7 +154,9 @@ class GeminiClient:
     
     def extract_metadata_from_filename(self, filename: str, file_hash: str) -> Optional[NovelMetadata]: # Return type changed
         """파일명에서 메타데이터 추출"""
-        # 제목 정리
+        # 제목 정리 (검색 쿼리용)
+        # Note: 원본 파일명은 로그에 표시하고, 정리된 제목은 API 검색에 사용
+        # 이렇게 하면 사용자는 원본 파일명을 볼 수 있고, API는 깨끗한 검색어로 검색 가능
         cleaned_title = clean_search_title(filename)
         
         # 프롬프트 생성
