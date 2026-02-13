@@ -141,16 +141,41 @@ class GeminiClient:
                     # response_mime_type="application/json"  # [Hotfix v3] Grounding과의 충돌 방지를 위해 주석 처리
                 )
             )
+            
+            # [Hotfix v4] Grounding Metadata 로깅 (사용자 가시성 확보)
+            if response.candidates and response.candidates[0].grounding_metadata:
+                gm = response.candidates[0].grounding_metadata
+                if gm.search_entry_point:
+                    # 실제 수행된 검색 쿼리 힌트 추출
+                    logger.info(f"   🔍 [Gemini Grounding] 검색 기능을 활용하여 정보를 수집 중입니다.")
+                
+                # 방문한 출처(Citations) 출력
+                if gm.grounding_chunks:
+                    sources = []
+                    for chunk in gm.grounding_chunks:
+                        if chunk.web and chunk.web.uri:
+                            sources.append(chunk.web.uri)
+                    
+                    if sources:
+                        unique_sources = list(set(sources))[:3] # 상위 3개만 출력
+                        logger.info(f"   🌐 [Sources] {', '.join(unique_sources)}")
+            
             return response.text
         except Exception as e:
+            # [Hotfix v5] 503 Server Overloaded 감지 시 즉시 포기 (Circuit Breaker)
+            error_str = str(e)
+            if "503" in error_str or "Overloaded" in error_str or "High demand" in error_str:
+                logger.warning(f"   ⚠️ Gemini Server 503/Overloaded. Skipping retries to save time. (Switching to Perplexity)")
+                return None  # 재시도 루프 탈출 및 즉시 실패 처리
+            
             logger.error(f"Gemini API error: {e}")
-            raise
+            raise e
     
-    def generate_content(self, prompt: str) -> str:
+    def generate_content(self, prompt: str) -> Optional[str]: # Return type changed to Optional[str]
         """Gemini API 호출 (일반 용도)"""
         return self._call_api(prompt)
     
-    def extract_metadata_from_filename(self, filename: str, file_hash: str) -> NovelMetadata:
+    def extract_metadata_from_filename(self, filename: str, file_hash: str) -> Optional[NovelMetadata]: # Return type changed
         """파일명에서 메타데이터 추출"""
         # 프롬프트 생성
         prompt = self._build_metadata_prompt(filename)
@@ -159,6 +184,10 @@ class GeminiClient:
         logger.info(f"🔍 Gemini Analysis: {filename}")
         response_text = self._call_api(prompt)
         
+        if not response_text:
+            logger.warning(f"   ⚠️ Gemini returned no response (or skipped due to 503).")
+            return None
+            
         # 응답 파싱
         metadata = self._parse_metadata_response(response_text, filename)
         
@@ -200,20 +229,18 @@ class GeminiClient:
     def _parse_metadata_response(self, response_text: str, filename: str) -> NovelMetadata:
         """응답 파싱"""
         try:
-            # [Hotfix v3] 정규식을 사용한 더 유연한 JSON 블록 추출
-            import re
+            # [Hotfix v5] JSON 파싱 로직 강화 (최외곽 중괄호 우선 탐색)
+            # 마크다운 코드 블록 유무와 상관없이 가장 바깥쪽의 { ... } 구조를 찾음
+            # re.DOTALL로 개행 문자 포함 매칭
+            main_json_match = re.search(r'(\{[\s\S]*\})', response_text)
             
-            # 1. 마크다운 JSON 블록 시도
-            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
-            if json_match:
-                json_text = json_match.group(1)
+            if main_json_match:
+                json_text = main_json_match.group(1)
             else:
-                # 2. 가장 바깥쪽 { } 블록 찾기 시도
-                json_match = re.search(r'(\{.*\})', response_text, re.DOTALL)
-                if json_match:
-                    json_text = json_match.group(1)
-                else:
-                    json_text = response_text.strip()
+                # 매칭되지 않으면 원본 사용 (혹시 모를 경우 대비)
+                json_text = response_text.strip()
+            
+            # 끊긴 JSON 자동 복구 (Hotfix v3 유지)
             
             # 3. 끊긴 JSON 복구 시도 (장애 방어)
             if json_text.count('{') > json_text.count('}'):

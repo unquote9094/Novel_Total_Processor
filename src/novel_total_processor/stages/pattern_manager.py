@@ -33,11 +33,26 @@ class PatternManager:
     ) -> Tuple[Optional[str], Optional[str]]:
         """최적의 패턴 탐색 (v3.0 Plan C 정밀 추적 포함)"""
         
-        # 1. 기대 화수 추출
+        # 1. 기대 화수 추출 (Hotfix v5: 작가명 숫자 오인식 방지)
         expected_count = 0
         if filename:
-            nums = re.findall(r'\d+', filename)
-            if nums: expected_count = int(nums[-1])
+            # 우선순위 1: 명시적 범위 (예: 1~370화, 1-370)
+            range_match = re.search(r'(?:~|-)(\d+)(?:화|회)?', filename)
+            if range_match:
+                expected_count = int(range_match.group(1))
+            else:
+                # 우선순위 2: 명시적 총 화수 (예: 총370화, (370화), [370])
+                total_match = re.search(r'(?:총|\(|\[)(\d+)(?:화|회|\]|\))', filename)
+                if total_match:
+                    expected_count = int(total_match.group(1))
+                else:
+                    # 우선순위 3: 마지막 숫자 (하지만 작가명 등 오인 가능성 있음 -> 보수적 적용)
+                    # "burn7" 같은 케이스 방지를 위해, 숫자가 3자리 이상일 때만 신뢰하거나 건너뜀
+                    # 여기서는 안전하게 0으로 두고, 명확하지 않으면 AI에 의존하지 않도록 함
+                    pass 
+            
+            if expected_count > 0:
+                logger.info(f"   🎯 [Target] 파일명에서 목표 화수 식별: {expected_count}화")
 
         # 2. AI 분석 (v3.0 원본 프롬프트 사용)
         logger.info(f"   -> 챕터 제목 패턴을 분석 중입니다... (Reference Mode)")
@@ -71,11 +86,12 @@ You are an expert in Regex (Regular Expressions) and Text Analysis.
 Analyze the following Novel Text Samples and identify the Pattern used for Chapter Titles.
 
 [Tasks]
-1. Find the most consistent pattern that denotes a new chapter start.
-   Examples: "제 1 화", "Chapter 1", "1화.", "Ep.1"
+1. Find all consistent patterns that denote a new chapter start.
+   **CRITICAL: Detect Mixed or Inconsistent patterns.**
+   If the novel uses multiple formats (e.g., some chapters use "1화", while others use "Chapter 1" or "Ep.1"), identify ALL of them.
 2. Create a Python Compatible Regular Expression (Regex) to match these chapter titles.
-   - Use `\s*` for flexible whitespace.
-   - Use `\d+` for numbers.
+   - Use the `|` (OR) operator to combine multiple patterns if necessary.
+   - Use `\s*` for flexible whitespace and `\d+` for numbers.
 3. OUTPUT ONLY the raw Regex string. No markdown, no content.
    - If no pattern found, return "NO_PATTERN_FOUND".
 
@@ -161,18 +177,29 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
         if actual_count < expected_count:
             logger.info(f"   🔄 부족 화수 추적 중 (누락: {expected_count - actual_count}개)")
             gaps = self.splitter.find_large_gaps(target_file, matches)
-            pattern = current_pattern
+            # [Hotfix v4] 화수 퇴보 방지 (Strict Improvement Rule)
+            best_pattern = current_pattern
+            best_count = actual_count
+            
             for gap in gaps:
                 sample = self.sampler.extract_samples_from(target_file, gap['start'], length=30000, encoding=encoding)
                 if not sample: continue
                 new_p = self._analyze_pattern_v3(sample)
                 if new_p:
-                    test_p = f"{pattern}|{new_p}"
+                    test_p = f"{best_pattern}|{new_p}"
                     test_s = self.splitter.verify_pattern(target_file, test_p, encoding=encoding)
-                    if test_s['match_count'] <= expected_count:
-                        pattern = test_p
-                        if test_s['match_count'] == expected_count: break
-            return pattern
+                    new_count = test_s.get('match_count', 0)
+                    
+                    # 1. 화수가 기존보다 늘어났고 2. 목표치를 넘지 않을 때만 수용
+                    if new_count > best_count and new_count <= expected_count:
+                        logger.info(f"   ✨ 패턴 보강 성공: {best_count}화 -> {new_count}화")
+                        best_pattern = test_p
+                        best_count = new_count
+                        if best_count == expected_count: break
+                    else:
+                        logger.info(f"   ❌ 보강 패턴 거절 (화수 변화: {best_count} -> {new_count})")
+            
+            return best_pattern
 
         return current_pattern
 
