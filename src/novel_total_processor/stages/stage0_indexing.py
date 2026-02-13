@@ -63,9 +63,16 @@ class FileScanner:
             FileInfo 리스트
         """
         if folders is None:
-            folders = self.config.paths.source_folders
+            folders = self.config.paths.source_folders or []
+        
+        # None이나 빈 문자열 필터링
+        folders = [f for f in folders if f]
         
         logger.info(f"Scanning {len(folders)} folders...")
+        
+        # 실종된 파일 정리 (M-30: Prune Missing Files)
+        self.prune_missing_files()
+        
         all_files: List[FileInfo] = []
         
         for folder in folders:
@@ -93,9 +100,13 @@ class FileScanner:
         """
         files: List[FileInfo] = []
         
+        filenames_all = []
         for root, _, filenames in os.walk(folder):
             for filename in filenames:
-                file_path = Path(root) / filename
+                filenames_all.append(Path(root) / filename)
+        
+        # 이름순 정렬 (ID 순서 고정)
+        for file_path in sorted(filenames_all):
                 
                 # 확장자 필터
                 ext = file_path.suffix.lower()
@@ -112,18 +123,23 @@ class FileScanner:
                     logger.warning(f"Failed to get size: {file_path} - {e}")
                     continue
                 
-                # 해시 계산
-                try:
-                    file_hash = self._calculate_hash(file_path)
-                except Exception as e:
-                    logger.error(f"Failed to hash: {file_path} - {e}")
-                    continue
-                
-                # 인코딩 감지 (TXT만)
+                # 인코딩 감지 및 자동 UTF-8 변환 (TXT만)
                 encoding = None
                 if ext == ".txt":
                     encoding = self._detect_encoding(file_path)
+                    if encoding:
+                        # UTF-8이 아니면 변환 실행
+                        self._ensure_utf8(file_path, encoding)
+                        encoding = "utf-8"  # 변환 후엔 utf-8임
                 
+                # 파일 정보 다시 읽기 (변환 후 크기/해시가 달라질 수 있음)
+                try:
+                    size = file_path.stat().st_size
+                    file_hash = self._calculate_hash(file_path)
+                except Exception as e:
+                    logger.error(f"Failed to process after conversion: {file_path} - {e}")
+                    continue
+
                 files.append(FileInfo(
                     path=str(file_path.absolute()),
                     name=file_path.name,
@@ -134,6 +150,35 @@ class FileScanner:
                 ))
         
         return files
+
+    def _ensure_utf8(self, file_path: Path, encoding: str) -> bool:
+        """파일을 UTF-8로 변환 및 저장
+        
+        Args:
+            file_path: 파일 경로
+            encoding: 현재 감지된 인코딩
+            
+        Returns:
+            성공 여부
+        """
+        if encoding.lower() in ['utf-8', 'utf-8-sig', 'ascii']:
+            return True
+            
+        try:
+            logger.info(f"   🔄 Converting to UTF-8: {file_path.name} ({encoding} -> utf-8)")
+            
+            # 1. 감지된 인코딩으로 읽기
+            with open(file_path, 'r', encoding=encoding, errors='replace') as f:
+                content = f.read()
+            
+            # 2. UTF-8로 덮어쓰기
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+                
+            return True
+        except Exception as e:
+            logger.error(f"   ❌ Conversion failed: {file_path} - {e}")
+            return False
     
     def _calculate_hash(self, file_path: Path) -> str:
         """XXHash 계산
@@ -305,3 +350,28 @@ class FileScanner:
         logger.info("=" * 50)
         
         return saved, duplicate_count
+    def prune_missing_files(self) -> None:
+        """DB에는 있으나 디스크에 실재하지 않는 파일 레코드 정리 (M-30)"""
+        conn = self.db.connect()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id, file_path FROM files")
+        rows = cursor.fetchall()
+        
+        missing_ids = []
+        for fid, fpath in rows:
+            if not Path(fpath).exists():
+                missing_ids.append(fid)
+        
+        if missing_ids:
+            logger.info(f"🗑️  실종된 파일 {len(missing_ids)}개를 DB에서 정리 중...")
+            # 파이프라인 상태 및 패턴 데이터도 함께 삭제 (CASCADE 제약 조건이 없을 경우 대비)
+            placeholders = ",".join(["?"] * len(missing_ids))
+            
+            cursor.execute(f"DELETE FROM processing_state WHERE file_id IN ({placeholders})", missing_ids)
+            cursor.execute(f"DELETE FROM episode_patterns WHERE file_id IN ({placeholders})", missing_ids)
+            cursor.execute(f"DELETE FROM rename_plan WHERE file_id IN ({placeholders})", missing_ids)
+            cursor.execute(f"DELETE FROM files WHERE id IN ({placeholders})", missing_ids)
+            
+            conn.commit()
+            logger.info(f"✅ 정리 완료")

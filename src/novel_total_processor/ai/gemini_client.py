@@ -1,4 +1,4 @@
-"""Gemini API 클라이언트
+"""Gemini API 클라이언트 (google-genai SDK)
 
 메타데이터 추출, Rate limiting, 응답 캐싱
 """
@@ -9,7 +9,8 @@ import time
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from novel_total_processor.utils.logger import get_logger
 from novel_total_processor.config.loader import get_config
@@ -27,15 +28,20 @@ class NovelMetadata:
     status: Optional[str] = None
     episode_range: Optional[str] = None
     rating: Optional[float] = None
+    cover_url: Optional[str] = None
+    platform: Optional[str] = None  # 연재 플랫폼 (노벨피아, 문피아 등)
+    last_updated: Optional[str] = None  # 최종 업데이트 날짜 (YYYY-MM-DD)
+    official_url: Optional[str] = None  # [M-49] 추가: AI가 참고한 공식 페이지 URL
 
 
 class GeminiClient:
-    """Gemini API 클라이언트"""
+    """Gemini API 클라이언트 (google.genai)"""
     
     def __init__(self):
         """초기화"""
         self.config = get_config()
-        self.model = None
+        self.client = None  # genai.Client
+        self.model_name = self.config.api.gemini.model
         self._initialized = False
         
         # Rate limiting (RPM)
@@ -58,21 +64,25 @@ class GeminiClient:
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             raise ValueError(
-                "GEMINI_API_KEY 환경변수가 설정되지 않았습니다.\n"
-                "Environment variable GEMINI_API_KEY is not set.\n"
-                "설정 방법 (How to set):\n"
-                "  PowerShell: $env:GEMINI_API_KEY=\"your_api_key\"\n"
-                "  CMD: set GEMINI_API_KEY=your_api_key\n"
-                "  또는 .env 파일 사용 (or use .env file)"
+                "❌ GEMINI_API_KEY 환경변수가 설정되지 않았습니다.\n"
+                "참고: 구글 AI 스튜디오에서 API 키를 발급받으세요.\n"
+                "\n"
+                "설정 방법:\n"
+                "  1. .env 파일 생성 후 'GEMINI_API_KEY=your_key' 입력\n"
+                "  2. 또는 터미널에서 설정:\n"
+                "     PowerShell: $env:GEMINI_API_KEY='your_key'\n"
+                "     CMD: set GEMINI_API_KEY=your_key"
             )
         
-        # Gemini 설정
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel(self.config.api.gemini.model)
-        self._initialized = True
-        
-        logger.info(f"GeminiClient initialized: model={self.config.api.gemini.model}")
-    
+        # google.genai Client 초기화
+        try:
+            self.client = genai.Client(api_key=api_key)
+            self._initialized = True
+            logger.info(f"GeminiClient initialized: model={self.model_name}")
+        except Exception as e:
+            logger.error(f"Failed to initialize Gemini Client: {e}")
+            raise
+
     def _wait_for_rate_limit(self) -> None:
         """Rate limit 대기"""
         elapsed = time.time() - self.last_call_time
@@ -83,25 +93,11 @@ class GeminiClient:
         self.last_call_time = time.time()
     
     def _get_cache_path(self, file_hash: str) -> Path:
-        """캐시 파일 경로 반환
-        
-        Args:
-            file_hash: 파일 해시
-        
-        Returns:
-            캐시 파일 경로
-        """
+        """캐시 파일 경로 반환"""
         return self.cache_dir / f"{file_hash}.json"
     
     def _load_from_cache(self, file_hash: str) -> Optional[Dict[str, Any]]:
-        """캐시에서 로드
-        
-        Args:
-            file_hash: 파일 해시
-        
-        Returns:
-            캐시된 응답 또는 None
-        """
+        """캐시에서 로드"""
         cache_path = self._get_cache_path(file_hash)
         if cache_path.exists():
             try:
@@ -114,12 +110,7 @@ class GeminiClient:
         return None
     
     def _save_to_cache(self, file_hash: str, data: Dict[str, Any]) -> None:
-        """캐시에 저장
-        
-        Args:
-            file_hash: 파일 해시
-            data: 저장할 데이터
-        """
+        """캐시에 저장"""
         cache_path = self._get_cache_path(file_hash)
         try:
             with open(cache_path, "w", encoding="utf-8") as f:
@@ -127,31 +118,28 @@ class GeminiClient:
             logger.debug(f"Cache saved: {file_hash[:8]}...")
         except Exception as e:
             logger.warning(f"Cache write failed: {e}")
-    
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type(Exception)
     )
     def _call_api(self, prompt: str) -> str:
-        """Gemini API 호출 (재시도 포함)
-        
-        Args:
-            prompt: 프롬프트
-        
-        Returns:
-            응답 텍스트
-        """
-        self._ensure_initialized()  # API 사용 전 초기화
+        """Gemini API 호출 (재시도 포함)"""
+        self._ensure_initialized()
         self._wait_for_rate_limit()
         
         try:
-            response = self.model.generate_content(
-                prompt,
-                generation_config={
-                    "temperature": 0.1,
-                    "max_output_tokens": 2048,
-                }
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    max_output_tokens=1024, # 응답 끊김 방지
+                    # Google Search Grounding 활성화 (진짜 웹 검색)
+                    tools=[types.Tool(google_search=types.GoogleSearch())],
+                    response_mime_type="application/json" # JSON 응답 강제
+                )
             )
             return response.text
         except Exception as e:
@@ -159,36 +147,16 @@ class GeminiClient:
             raise
     
     def generate_content(self, prompt: str) -> str:
-        """Gemini API 호출 (일반 용도)
-        
-        Args:
-            prompt: 프롬프트
-        
-        Returns:
-            응답 텍스트
-        """
+        """Gemini API 호출 (일반 용도)"""
         return self._call_api(prompt)
     
     def extract_metadata_from_filename(self, filename: str, file_hash: str) -> NovelMetadata:
-        """파일명에서 메타데이터 추출
-        
-        Args:
-            filename: 파일명
-            file_hash: 파일 해시 (캐싱용)
-        
-        Returns:
-            NovelMetadata 객체
-        """
-        # 캐시 확인
-        cached = self._load_from_cache(file_hash)
-        if cached:
-            return NovelMetadata(**cached)
-        
+        """파일명에서 메타데이터 추출"""
         # 프롬프트 생성
         prompt = self._build_metadata_prompt(filename)
         
         # API 호출
-        logger.debug(f"Extracting metadata: {filename}")
+        logger.info(f"🔍 Gemini Analysis: {filename}")
         response_text = self._call_api(prompt)
         
         # 응답 파싱
@@ -200,14 +168,7 @@ class GeminiClient:
         return metadata
     
     def _build_metadata_prompt(self, filename: str) -> str:
-        """메타데이터 추출 프롬프트 생성
-        
-        Args:
-            filename: 파일명
-        
-        Returns:
-            프롬프트 문자열
-        """
+        """메타데이터 추출 프롬프트 생성"""
         return f"""다음 소설 파일명에서 메타데이터를 추출하세요.
 
 파일명: {filename}
@@ -217,36 +178,32 @@ class GeminiClient:
   "title": "소설 제목",
   "author": "작가명 (없으면 null)",
   "genre": "장르 (판타지/로맨스/무협 등, 없으면 null)",
-  "tags": ["태그1", "태그2"] (없으면 빈 배열),
-  "status": "완결/연재/휴재 (없으면 null)",
-  "episode_range": "1~340화" 형식 (없으면 null),
-  "rating": null (파일명에서는 알 수 없음)
+  "tags": ["태그1", "태그2"],
+  "status": "완결/연재/휴재",
+  "episode_range": "1~340화",
+  "rating": 0.0,
+  "cover_url": "공식 표지 이미지 URL (없으면 null)",
+  "platform": "공식 연재 플랫폼 명칭",
+  "last_updated": "최종 업데이트 날짜 YYYY-MM-DD",
+  "official_url": "당신이 정보를 추출한 가장 정확한 공식 상세 페이지 URL"
 }}
 
 규칙:
-1. 제목은 대괄호[], 소괄호() 등의 접두사/접미사를 제거하고 정규화
-2. 작가명이 파일명에 있으면 추출
-3. 장르는 대표 장르 1개만
-4. 태그는 최대 5개까지
-5. 화수는 "1~340화" 형식으로 정규화
-6. JSON만 출력 (설명 없이)
+1. **Google 검색 도구를 사용하여 공식 상세 페이지 URL(리디, 카카오, 네이버, 노벨피아, 문피아 등)을 최우선으로 찾으십시오.**
+2. **찾은 공식 상세 페이지의 정보를 기반으로 정확한 데이터를 추출하십시오.**
+3. **official_url 필드에는 당신이 실제 방문한 소설 상세 페이지 URL을 반드시 기입하십시오.**
+4. **표지 이미지는 공식 일러스트 URL을 찾되, 사이트 로고(logo), 아이콘(icon), 혹은 기본 이미지(svg, default, ico)는 절대 기입하지 마십시오.**
+5. JSON만 출력하십시오.
+6. **모든 정보는 반드시 한국어로 번역하십시오.** (장르, 태그, 상태 등)
 """
     
     def _parse_metadata_response(self, response_text: str, filename: str) -> NovelMetadata:
-        """응답 파싱
-        
-        Args:
-            response_text: API 응답
-            filename: 원본 파일명 (fallback용)
-        
-        Returns:
-            NovelMetadata 객체
-        """
+        """응답 파싱"""
         try:
-            # JSON 추출 (```json ... ``` 제거)
             json_text = response_text.strip()
             if json_text.startswith("```"):
-                json_text = json_text.split("```")[1]
+                parts = json_text.split("```")
+                json_text = parts[1]
                 if json_text.startswith("json"):
                     json_text = json_text[4:]
             
@@ -259,41 +216,31 @@ class GeminiClient:
                 tags=data.get("tags", []),
                 status=data.get("status"),
                 episode_range=data.get("episode_range"),
-                rating=data.get("rating")
+                rating=data.get("rating"),
+                cover_url=self._filter_cover_url(data.get("cover_url")),
+                platform=data.get("platform"),
+                last_updated=data.get("last_updated"),
+                official_url=data.get("official_url")
             )
         except Exception as e:
             logger.error(f"Failed to parse response: {e}")
             logger.debug(f"Response: {response_text}")
-            # Fallback: 파일명을 제목으로
             return NovelMetadata(title=filename)
+
+    def _filter_cover_url(self, url: Optional[str]) -> Optional[str]:
+        """부적절한 이미지 URL 필터링 (Hotfix)"""
+        if not url: return None
+        bad_patterns = [".svg", ".ico", "logo", "icon", "default", "mark"]
+        url_lower = url.lower()
+        if any(p in url_lower for p in bad_patterns):
+            logger.warning(f"   ⚠️  부적절한 이미지 URL 감별되어 스킵: {url}")
+            return None
+        return url
     
     def extract_batch(self, files: List[Dict[str, str]], batch_size: int = 10) -> List[NovelMetadata]:
-        """배치 메타데이터 추출
-        
-        Args:
-            files: [{"filename": "...", "hash": "..."}, ...]
-            batch_size: 배치 크기
-        
-        Returns:
-            NovelMetadata 리스트
-        """
+        """배치 메타데이터 추출"""
         results: List[NovelMetadata] = []
-        total = len(files)
-        
-        logger.info(f"Extracting metadata for {total} files (batch_size={batch_size})...")
-        
-        for i in range(0, total, batch_size):
-            batch = files[i:i+batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1}/{(total + batch_size - 1)//batch_size}")
-            
-            for file in batch:
-                metadata = self.extract_metadata_from_filename(
-                    file["filename"],
-                    file["hash"]
-                )
-                results.append(metadata)
-            
-            logger.info(f"  Completed {min(i+batch_size, total)}/{total}")
-        
-        logger.info(f"✅ Batch extraction complete: {len(results)} files")
+        for file in files:
+            metadata = self.extract_metadata_from_filename(file["filename"], file["hash"])
+            results.append(metadata)
         return results

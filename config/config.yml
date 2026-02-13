@@ -1,106 +1,40 @@
-# Novel Total Processor 설정 파일
-# 이 파일을 수정하여 프로젝트 동작을 커스터마이즈하세요.
-
-# ========================================
-# 경로 설정
-# ========================================
 paths:
-  # 소설 파일이 있는 폴더들 (여러 개 지정 가능)
-  # 첫 실행 시 폴더 선택 대화상자가 표시됩니다
-  source_folders: []
-  
-  # 처리 완료된 파일 저장 위치
-  output_folder: "E:/소설/완성"
-  
-  # 데이터베이스 파일
-  database: "data/ntp.db"
-  
-  # 표지 이미지 저장 폴더
-  covers: "data/covers"
-  
-  # 로그 파일 폴더
-  logs: "data/logs"
-
-# ========================================
-# API 설정
-# ========================================
+  source_folders:
+  - E:/DEVz/10_Novel_Total_Processor/Test_Novels/TEST
+  output_folder: E:/DEVz/10_Novel_Total_Processor/Test_Novels/완성
+  database: data/ntp.db
+  covers: data/covers
+  logs: data/logs
 api:
-  # Gemini API (메타데이터 추출, 화수 검증)
   gemini:
-    model: "gemini-3-flash-preview"
-    # API 키는 환경변수 GEMINI_API_KEY에서 읽음
-    max_retries: 3
-    timeout: 30  # 초
-    rate_limit: 60  # RPM (분당 요청 수)
-  
-  # Perplexity API (웹 검색, 메타데이터 보강)
-  perplexity:
-    # API 키는 환경변수 PERPLEXITY_API_KEY에서 읽음
-    search_model: "search"
-    agent_model: "openai/gpt-5.2"
-    max_retries: 3
+    model: gemini-3-flash-preview
+    max_retries: 5
     timeout: 30
-    rate_limit: 60  # RPM
-
-# ========================================
-# 처리 옵션
-# ========================================
+    rate_limit: 60
+  perplexity:
+    search_model: sonar
+    agent_model: sonar
+    max_retries: 5
+    timeout: 30
+    rate_limit: 60
 processing:
-  # 동시 처리 파일 수
   max_workers: 4
-  
-  # 배치 크기 (한 번에 처리할 파일 수)
   batch_size: 10
-  
-  # 중복 파일 처리 방식 (skip/overwrite/rename)
-  duplicate_handling: "skip"
-  
-  # 인코딩 감지 자동화
+  duplicate_handling: skip
   auto_detect_encoding: true
-  
-  # 기본 인코딩 (자동 감지 실패 시)
-  default_encoding: "utf-8"
-
-# ========================================
-# EPUB 생성 옵션
-# ========================================
+  default_encoding: utf-8
 epub:
-  # EPUB 버전 (2 또는 3, 모바일 호환성 위해 2 권장)
   version: 2
-  
-  # 표지 이미지 크기 (픽셀)
   cover_size:
-    width: 600
-    height: 900
-  
-  # CSS 스타일 파일
-  css_template: "config/epub_style.css"
-  
-  # 챕터당 최대 글자 수 (분할 기준)
-  max_chars_per_chapter: 50000
-
-# ========================================
-# 로깅 설정
-# ========================================
+    width: 1600
+    height: 2400
+  css_template: config/epub_style.css
+  max_chars_per_chapter: 300000
 logging:
-  # 파일 로그 레벨 (DEBUG/INFO/WARNING/ERROR)
-  file_level: "DEBUG"
-  
-  # 콘솔 로그 레벨
-  console_level: "INFO"
-  
-  # 로그 파일 보관 일수
+  file_level: DEBUG
+  console_level: INFO
   retention_days: 30
-
-# ========================================
-# UI 설정
-# ========================================
 ui:
-  # Rich UI 테마 (dark/light)
-  theme: "dark"
-  
-  # 진행률 표시 간격 (초)
+  theme: dark
   progress_update_interval: 1
-  
-  # 에러 표시 최대 개수
-  max_error_display: 5
+  max_error_display: 20

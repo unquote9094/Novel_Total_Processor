@@ -49,6 +49,13 @@ def setup_logging(level: str = "DEBUG", console_level: str = "INFO") -> None:
     # 초기 로그
     root_logger.info(f"Logging initialized: file={LOG_FILE}, level={level}")
 
+    # 외부 라이브러리 로그 레벨 조정 (노이즈 감소)
+    logging.getLogger("chardet").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("google").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
     """로거 인스턴스 반환

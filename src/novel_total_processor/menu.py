@@ -9,6 +9,11 @@ from rich.prompt import Prompt, IntPrompt, Confirm
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from tkinter import Tk, filedialog
+from dotenv import load_dotenv
+import os
+
+# 환경변수 로드
+load_dotenv()
 from novel_total_processor.utils.logger import get_logger
 from novel_total_processor.db.schema import get_database
 from novel_total_processor.config.loader import get_config, save_config
@@ -102,12 +107,12 @@ class InteractiveMenu:
         total = row[0] or 1
         
         stages = [
-            ("Stage 0: 파일 인덱싱\n[dim]File Indexing[/dim]", row[1]),
-            ("Stage 1: 메타데이터 수집\n[dim]Metadata Collection[/dim]", row[2]),
-            ("Stage 4: 챕터 분할\n[dim]Chapter Splitting[/dim]", row[3]),
-            ("Stage 2: 화수 검증\n[dim]Episode Verification[/dim]", row[4]),
-            ("Stage 3: 파일명 생성\n[dim]Filename Generation[/dim]", row[5]),
-            ("Stage 5: EPUB 생성\n[dim]EPUB Generation[/dim]", row[6]),
+            ("Stage 0: 파일 인덱싱\n[dim]File Indexing[/dim]", row[1] or 0),
+            ("Stage 1: 메타데이터 수집\n[dim]Metadata Collection[/dim]", row[2] or 0),
+            ("Stage 4: 챕터 분할\n[dim]Chapter Splitting[/dim]", row[3] or 0),
+            ("Stage 2: 화수 검증\n[dim]Episode Verification[/dim]", row[4] or 0),
+            ("Stage 3: 파일명 생성\n[dim]Filename Generation[/dim]", row[5] or 0),
+            ("Stage 5: EPUB 생성\n[dim]EPUB Generation[/dim]", row[6] or 0),
         ]
         
         for stage_name, count in stages:
@@ -130,6 +135,7 @@ class InteractiveMenu:
             "[7] 🚀 전체 파이프라인 실행 (Run Full Pipeline)",
             "[8] 🔍 데이터베이스 조회 (Database Viewer)",
             "[9] ✅ EPUB 검증 (EPUB Verification)",
+            "[10] 📂 소스 폴더 변경 (Change Source Folder)",
             "[0] 🚪 종료 (Exit)",
         ]
         
@@ -359,70 +365,15 @@ class InteractiveMenu:
     
     def run_db_viewer(self):
         """DB 뷰어 실행"""
-        console.print(Panel.fit(
-            "[bold blue]🔍 데이터베이스 조회[/bold blue]\n"
-            "[dim]Database Viewer - View files and metadata[/dim]",
-            border_style="blue"
-        ))
-        
-        conn = self.db.connect()
-        cursor = conn.cursor()
-        
-        # 파일 목록 조회
-        cursor.execute("""
-            SELECT f.id, f.file_name, f.file_size, 
-                   n.title, n.author, n.genre, n.status,
-                   ps.stage0_indexed, ps.stage1_meta, ps.stage4_split, 
-                   ps.stage2_episode, ps.stage3_rename, ps.stage5_epub
-            FROM files f
-            LEFT JOIN novels n ON f.id = n.id
-            LEFT JOIN processing_state ps ON f.id = ps.file_id
-            WHERE f.is_duplicate = 0
-            LIMIT 20
-        """)
-        
-        rows = cursor.fetchall()
-        
-        if not rows:
-            console.print("\n[yellow]파일이 없습니다.[/yellow]")
-            return
-        
-        table = Table(show_header=True, header_style="bold cyan")
-        table.add_column("#", style="dim", width=4)
-        table.add_column("파일명", width=30)
-        table.add_column("크기", justify="right", width=10)
-        table.add_column("제목", width=20)
-        table.add_column("작가", width=10)
-        table.add_column("0", justify="center", width=3)
-        table.add_column("1", justify="center", width=3)
-        table.add_column("4", justify="center", width=3)
-        table.add_column("2", justify="center", width=3)
-        table.add_column("3", justify="center", width=3)
-        table.add_column("5", justify="center", width=3)
-        
-        for row in rows:
-            file_id, file_name, file_size, title, author, genre, status = row[:7]
-            s0, s1, s4, s2, s3, s5 = row[7:]
-            
-            size_mb = f"{file_size/1024/1024:.1f}MB" if file_size else "-"
-            
-            table.add_row(
-                str(file_id),
-                file_name[:28] + "..." if len(file_name) > 30 else file_name,
-                size_mb,
-                (title[:18] + "...") if title and len(title) > 20 else (title or "-"),
-                author or "-",
-                "✅" if s0 else "❌",
-                "✅" if s1 else "❌",
-                "✅" if s4 else "❌",
-                "✅" if s2 else "❌",
-                "✅" if s3 else "❌",
-                "✅" if s5 else "❌"
-            )
-        
-        console.print("\n")
-        console.print(table)
-        console.print("\n[dim]Stage: 0=인덱싱, 1=메타, 4=챕터분할, 2=화수검증, 3=파일명, 5=EPUB[/dim]")
+        try:
+            from novel_total_processor.utils.db_viewer import DBViewer
+            viewer = DBViewer()
+            viewer.run()
+        except ImportError as e:
+            console.print(f"[red]DB 뷰어 모듈을 로드할 수 없습니다: {e}[/red]")
+        except Exception as e:
+            console.print(f"[red]DB 뷰어 실행 중 오류 발생: {e}[/red]")
+            logger.error(f"DB Viewer Error: {e}", exc_info=True)
     
     def run_verification(self):
         """EPUB 검증 실행"""
@@ -473,6 +424,49 @@ class InteractiveMenu:
         
         # 리포트 출력
         verifier.print_report(results)
+    
+    def change_source_folder(self):
+        """소스 폴더 변경"""
+        console.print(Panel.fit(
+            "[bold yellow]📂 소스 폴더 변경 (Change Source Folder)[/bold yellow]\n"
+            "[dim]Change the source folder for novel files[/dim]",
+            border_style="yellow"
+        ))
+        
+        current_folders = self.config.paths.source_folders or []
+        console.print(f"\n현재 설정된 폴더 (Current Folders):")
+        if current_folders:
+            for folder in current_folders:
+                console.print(f"  - [cyan]{folder}[/cyan]")
+        else:
+            console.print("  [dim]설정된 폴더 없음 (No folders configured)[/dim]")
+        
+        if not Confirm.ask("\n새로운 폴더를 선택하시겠습니까? (Select a new folder?)"):
+            return
+            
+        # tkinter 루트 윈도우 숨기기
+        root = Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        
+        selected_folder = filedialog.askdirectory(
+            title="소설 파일이 있는 폴더를 선택하세요"
+        )
+        
+        root.destroy()
+        
+        if selected_folder:
+            # 선택한 폴더로 교체 (단일 폴더 모드처럼 동작)
+            self.config.paths.source_folders = [selected_folder]
+            save_config(self.config)
+            console.print(f"\n[bold green]✅ 폴더 변경 완료: {selected_folder}[/bold green]")
+            
+            # 안내 메시지
+            console.print("\n[yellow]💡 변경된 폴더를 반영하려면 [1] 파일 인덱싱이나 [7] 전체 파이프라인을 실행하세요.[/yellow]")
+            console.print("[dim]Run [1] File Indexing or [7] Full Pipeline to process the new folder.[/dim]")
+            
+        else:
+            console.print("\n[yellow]취소되었습니다. (Cancelled)[/yellow]")
     
     def run_pipeline(self):
         """전체 파이프라인 실행"""
@@ -553,7 +547,7 @@ class InteractiveMenu:
                 
                 choice = Prompt.ask(
                     "\n선택하세요 (Choose an option)",
-                    choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+                    choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
                     default="8"
                 )
                 
@@ -578,6 +572,8 @@ class InteractiveMenu:
                     self.run_db_viewer()
                 elif choice == "9":
                     self.run_verification()
+                elif choice == "10":
+                    self.change_source_folder()
                 
                 console.print("\n" + "=" * 60)
                 input("\n계속하려면 Enter를 누르세요... (Press Enter to continue...)")

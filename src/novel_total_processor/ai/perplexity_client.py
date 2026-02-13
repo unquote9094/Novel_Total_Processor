@@ -72,17 +72,8 @@ class PerplexityClient:
         self.last_call_time = time.time()
     
     def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
-        """웹 검색 (Search API)
-        
-        Args:
-            query: 검색 쿼리
-            max_results: 최대 결과 수
-        
-        Returns:
-            SearchResult 리스트
-        """
+        """웹 검색 (Search API)"""
         if not self.enabled:
-            logger.warning("Perplexity disabled - returning empty results")
             return []
         
         self._wait_for_rate_limit()
@@ -95,11 +86,10 @@ class PerplexityClient:
         payload = {
             "query": query,
             "max_results": max_results,
-            "search_language_filter": ["ko"],  # 한국어 우선
+            "search_language_filter": ["ko"],
         }
         
         try:
-            logger.debug(f"Searching: {query}")
             response = requests.post(
                 self.search_url,
                 headers=headers,
@@ -110,117 +100,130 @@ class PerplexityClient:
             
             data = response.json()
             results = []
-            
             for item in data.get("results", []):
                 results.append(SearchResult(
                     title=item.get("title", ""),
                     url=item.get("url", ""),
                     snippet=item.get("snippet", ""),
                 ))
-            
-            logger.debug(f"Found {len(results)} results")
             return results
-        
         except Exception as e:
             logger.error(f"Search failed: {e}")
             return []
     
     def search_novel_info(self, title: str, author: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """소설 정보 검색
-        
-        Args:
-            title: 소설 제목
-            author: 작가명 (선택)
-        
-        Returns:
-            {"rating": float, "cover_url": str, "tags": [str]} 또는 None
-        """
+        """소설 정보 상세 검색 (Chat API + Online Model)"""
         if not self.enabled:
             return None
         
-        # 검색 쿼리 생성
-        query = f"{title} 소설"
-        if author:
-            query += f" {author}"
-        query += " 별점 표지 리디북스 교보문고"
-        
-        results = self.search(query, max_results=3)
-        
-        if not results:
-            return None
-        
-        # 첫 번째 결과에서 정보 추출 시도
-        # (실제로는 Agent API로 상세 페이지 파싱 필요)
-        # 여기서는 간단히 URL만 반환
-        return {
-            "rating": None,  # 실제 구현 시 Agent API로 추출
-            "cover_url": None,  # 실제 구현 시 Agent API로 추출
-            "tags": [],
-            "source_url": results[0].url if results else None
+        url = "https://api.perplexity.ai/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
         }
-    
+        
+        system_prompt = "You are a helpful assistant. Search for the novel info. Output valid JSON only."
+        user_prompt = f"""
+Search for the Korean web novel "{title}"{f' by {author}' if author else ''}.
+1. First, find its OFFICIAL and LATEST detail page URL from platforms like Ridi, KakaoPage, Naver Series, Novelpia, Munpia, Joara.
+2. Extract info from that official page.
+3. Find its official title, author, rating (out of 10.0), genre, tags, status, episode range, last updated date, and cover image URL.
+
+Response Format (JSON):
+{{
+    "title": "string",
+    "author": "string",
+    "rating": 0.0,
+    "genre": "string",
+    "tags": ["tag1", "tag2"],
+    "status": "string",
+    "episode_range": "string",
+    "source_url": "당신이 실제 정보를 가져온 공식 상세 페이지 URL",
+    "cover_url": "실제 도서 표지 이미지 URL (로고 제외)",
+    "platform": "Platform Name",
+    "last_updated": "YYYY-MM-DD"
+}}
+
+RULES:
+1. **ALWAYS translate genre, tags, and status into Korean.**
+2. **DO NOT provide site logos (e.g., logo.svg, icon) or default images as a cover_url.** Only actual book covers.
+3. **source_url MUST be the official detail page URL.**
+"""
+        
+        payload = {
+            "model": self.config.api.perplexity.agent_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.1
+        }
+        
+        try:
+            logger.info(f"   🤖 Asking Perplexity (Online): {title}")
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+            
+            result = response.json()
+            content = result["choices"][0]["message"]["content"]
+            
+            # JSON 파싱
+            import re
+            json_str = content
+            if "```json" in content:
+                json_str = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                json_str = content.split("```")[1].split("```")[0].strip()
+            
+            data = json.loads(json_str)
+            
+            # 상세 로깅
+            logger.info(f"     [Perplexity Result]")
+            logger.info(f"       - Title: {data.get('title')}")
+            logger.info(f"       - Author: {data.get('author')}")
+            logger.info(f"       - Genre: {data.get('genre')}")
+            logger.info(f"       - Rating: {data.get('rating')}")
+            logger.info(f"       - Tags: {', '.join(data.get('tags', [])) if data.get('tags') else '[]'}")
+            logger.info(f"       - Status: {data.get('status')}")
+            logger.info(f"       - Episodes: {data.get('episode_range')}")
+            logger.info(f"       - Platform: {data.get('platform')}")
+            logger.info(f"       - Updated: {data.get('last_updated')}")
+            logger.info(f"       - Source: {data.get('source_url')}")
+            
+            return data
+        except Exception as e:
+            logger.error(f"Perplexity Deep Search failed: {e}")
+            return None
+
     def download_cover(self, cover_url: str, novel_id: int) -> Optional[str]:
-        """표지 이미지 다운로드
-        
-        Args:
-            cover_url: 표지 이미지 URL
-            novel_id: 소설 ID
-        
-        Returns:
-            저장된 파일 경로 또는 None
-        """
+        """표지 이미지 다운로드 (Hotfix: SVG/ICO 필터링 포함)"""
         if not cover_url:
             return None
         
+        # [Hotfix] 이미지 형식 필터링 (SVG, ICO, Logo 배제)
+        url_lower = cover_url.lower()
+        bad_patterns = [".svg", ".ico", "logo", "icon", "default", "mark"]
+        if any(p in url_lower for p in bad_patterns):
+            logger.warning(f"   ⚠️  부적절한 이미지 형식 감별되어 다운로드 스킵: {cover_url}")
+            return None
+
         try:
             logger.debug(f"Downloading cover: {cover_url}")
-            
-            # 이미지 다운로드
             response = requests.get(cover_url, timeout=10)
             response.raise_for_status()
             
-            # PIL로 열기
             img = Image.open(BytesIO(response.content))
-            
-            # 리사이즈 (600x900)
             target_size = (
                 self.config.epub.cover_size["width"],
                 self.config.epub.cover_size["height"]
             )
             img.thumbnail(target_size, Image.Resampling.LANCZOS)
             
-            # 저장
             cover_path = self.cover_dir / f"{novel_id}.jpg"
             img.convert("RGB").save(cover_path, "JPEG", quality=90)
             
             logger.info(f"✅ Cover saved: {cover_path}")
             return str(cover_path)
-        
         except Exception as e:
             logger.error(f"Cover download failed: {e}")
             return None
-    
-    def batch_search(self, queries: List[str]) -> List[List[SearchResult]]:
-        """배치 검색 (멀티쿼리)
-        
-        Args:
-            queries: 검색 쿼리 리스트 (최대 5개)
-        
-        Returns:
-            각 쿼리별 SearchResult 리스트
-        """
-        if not self.enabled:
-            return [[] for _ in queries]
-        
-        if len(queries) > 5:
-            logger.warning(f"Too many queries ({len(queries)}), splitting into batches")
-        
-        results = []
-        for i in range(0, len(queries), 5):
-            batch = queries[i:i+5]
-            logger.info(f"Batch search: {len(batch)} queries")
-            
-            for query in batch:
-                results.append(self.search(query))
-        
-        return results

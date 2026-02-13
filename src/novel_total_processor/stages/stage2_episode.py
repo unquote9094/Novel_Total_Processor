@@ -4,6 +4,7 @@
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 import chardet
@@ -128,8 +129,10 @@ class EpisodePatternDetector:
             SELECT f.id, f.file_path, f.file_hash, f.encoding
             FROM files f
             JOIN processing_state ps ON f.id = ps.file_id
-            WHERE ps.stage4_split = 1 AND ps.stage2_episode = 0
-            AND f.is_duplicate = 0 AND f.file_ext = '.txt'
+            WHERE (ps.stage4_split = 1 OR f.file_ext = '.epub') 
+            AND ps.stage2_episode = 0
+            AND f.is_duplicate = 0 AND f.file_ext IN ('.txt', '.epub')
+            ORDER BY f.id ASC
         """
         
         if limit:
@@ -139,7 +142,7 @@ class EpisodePatternDetector:
         rows = cursor.fetchall()
         
         files = [
-            {"id": row[0], "path": row[1], "hash": row[2], "encoding": row[3]}
+            {"id": row[0], "file_path": row[1], "file_hash": row[2], "encoding": row[3]}
             for row in rows
         ]
         
@@ -346,7 +349,7 @@ class EpisodePatternDetector:
         # processing_state 업데이트
         cursor.execute("""
             UPDATE processing_state
-            SET stage2_episode = 1, last_stage = 'stage2', updated_at = datetime('now','localtime')
+            SET stage2_episode = 1, last_stage = 'stage2'
             WHERE file_id = ?
         """, (file_id,))
         
@@ -377,25 +380,73 @@ class EpisodePatternDetector:
         failed_count = 0
         
         for i, file in enumerate(files):
-            logger.info(f"[{i+1}/{len(files)}] {Path(file['path']).name}")
+            file_path_obj = Path(file['file_path'])
+            logger.info(f"[{i+1}/{len(files)}] {file_path_obj.name}")
             
+            if not file_path_obj.exists():
+                logger.warning(f"   ⚠️  파일이 디스크에 없습니다. 스킵합니다: {file_path_obj}")
+                failed_count += 1
+                continue
+                
             try:
-                pattern_data = self.detect_pattern(
-                    file["id"],
-                    file["path"],
-                    file["hash"],
-                    file["encoding"]
-                )
+                # EPUB인 경우: 분석된 챕터 수와 메타데이터의 기대 화수 비교 검증 (M-26)
+                if file_path_obj.suffix.lower() == '.epub':
+                    logger.info("   -> EPUB 원본: 화수 정합성 검증 시작")
+                    cursor = self.db.connect().cursor()
+                    cursor.execute("""
+                        SELECT n.episode_range, n.chapter_count 
+                        FROM novels n 
+                        JOIN files f ON n.id = f.novel_id 
+                        WHERE f.id = ?
+                    """, (file["id"],))
+                    res = cursor.fetchone()
+                    
+                    actual_count = res[1] if res and res[1] else 0
+                    expected_range = res[0] if res and res[0] else "Unknown"
+                    
+                    # 챕터 수 검증 로직 (간단하게 숫자가 포함되어 있는지 확인)
+                    expected_count = 0
+                    if expected_range != "Unknown":
+                        nums = re.findall(r'\d+', expected_range)
+                        if len(nums) >= 2:
+                            expected_count = int(nums[1]) - int(nums[0]) + 1
+                        elif len(nums) == 1:
+                            expected_count = int(nums[0])
+                    
+                    confidence = 1.0
+                    if expected_count > 0:
+                        diff = abs(actual_count - expected_count)
+                        if diff > 5: # 5화 이상 차이 나면 의심
+                            logger.warning(f"   ⚠️ 화수 불일치 의심: 실제 {actual_count}ch vs 기대 {expected_count}화 ({expected_range})")
+                            confidence = 0.5
+                        else:
+                            logger.info(f"   ✅ 화수 검증 완료: 실제 {actual_count}ch vs 기대 {expected_count}화")
+                    
+                    pattern_data = {
+                        "pattern_regex": "EPUB_VERIFIED",
+                        "detected_start": 1,
+                        "detected_end": actual_count,
+                        "confidence": confidence,
+                        "pattern_json": json.dumps({"type": "epub", "range": expected_range, "actual": actual_count})
+                    }
+                else:
+                    pattern_data = self.detect_pattern(
+                        file["id"],
+                        file["file_path"],
+                        file["file_hash"],
+                        file["encoding"]
+                    )
                 
                 self.save_to_db(file["id"], pattern_data)
                 
-                logger.debug(f"  Pattern: {pattern_data['pattern_regex']}")
-                logger.debug(f"  Range: {pattern_data['detected_start']}~{pattern_data['detected_end']}")
-                logger.debug(f"  Confidence: {pattern_data['confidence']:.2f}")
+                if file_path_obj.suffix.lower() != '.epub': # Changed file_path to file_path_obj
+                    logger.debug(f"  Pattern: {pattern_data['pattern_regex']}")
+                    logger.debug(f"  Range: {pattern_data['detected_start']}~{pattern_data['detected_end']}")
+                    logger.debug(f"  Confidence: {pattern_data['confidence']:.2f}")
                 
                 success_count += 1
             except Exception as e:
-                logger.error(f"Failed to process: {e}")
+                logger.error(f"Failed to process {file_path_obj.name}: {e}")
                 failed_count += 1
         
         logger.info("=" * 50)

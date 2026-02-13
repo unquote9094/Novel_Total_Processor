@@ -24,3 +24,7 @@
 - [x] **Stage 5 EPUB**: 다중 챕터, 계층형 목차, EPUB 보강, Helper Method (완료)
 - [x] **검증 시스템**: EPUBVerifier 10가지 항목 검증, DB Viewer 구현 (완료)
 - [x] **UI**: 메뉴 및 설정 개선, 파이프라인 순서 변경 (완료)
+
+## To Do
+- [ ] **Phase G (DB Viewer)**: 메뉴에는 있지만 기능 구현 안됨 (`db_viewer.py` 없음)
+- [ ] **Phase H (Packaging)**: 실행 파일 패키징 (`pyinstaller`)
