@@ -44,7 +44,7 @@ def mock_generate_content(prompt):
         if found_titles:
             return '\n'.join(found_titles[:10])  # Return up to 10 titles
         return "NO_TITLES_FOUND"
-    elif "pattern_analysis" in prompt or "=== pattern_refinement ===" in prompt:
+    elif "pattern_refinement" in prompt or "pattern_analysis" in prompt:
         # Return a pattern that matches angle brackets with optional numbers
         return r"^\s*<\s*.+?(?:\(\d*\))?\s*>\s*$"
     
