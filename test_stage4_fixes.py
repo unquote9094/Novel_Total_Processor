@@ -168,28 +168,49 @@ def test_stagnation_detection():
     
     runner = ChapterSplitRunner(mock_db)
     
-    # Test 1: No stagnation (counts change)
-    logger.info("  Testing non-stagnant case (changing counts)...")
-    chapter_count_history = [10, 11, 12]
+    # Test 1: No stagnation (counts change significantly)
+    logger.info("  Testing non-stagnant case (significant changes)...")
+    chapter_count_history = [10, 15, 20]
     is_stagnant = runner._is_stagnant(chapter_count_history, threshold=3)
-    assert not is_stagnant, "Expected no stagnation for changing counts"
-    logger.info("    ✓ No stagnation detected for changing counts")
+    assert not is_stagnant, "Expected no stagnation for significantly changing counts"
+    logger.info("    ✓ No stagnation detected for significant changes")
     
-    # Test 2: Stagnation detected (same count)
+    # Test 2: Stagnation detected (exact same count)
     logger.info("  Testing stagnant case (same count 3 times)...")
     chapter_count_history = [10, 10, 10]
     is_stagnant = runner._is_stagnant(chapter_count_history, threshold=3)
     assert is_stagnant, "Expected stagnation for same counts"
     logger.info("    ✓ Stagnation detected for repeated counts")
     
-    # Test 3: Stagnation after initial change
+    # Test 3: Stagnation detected (+/-1 fluctuation)
+    logger.info("  Testing stagnation with +/-1 fluctuation...")
+    chapter_count_history = [10, 11, 10]
+    is_stagnant = runner._is_stagnant(chapter_count_history, threshold=3)
+    assert is_stagnant, "Expected stagnation for +/-1 fluctuation"
+    logger.info("    ✓ Stagnation detected for +/-1 fluctuation")
+    
+    # Test 4: Stagnation detected (+/-2 fluctuation)
+    logger.info("  Testing stagnation with +/-2 fluctuation...")
+    chapter_count_history = [85, 85, 87, 85]
+    is_stagnant = runner._is_stagnant(chapter_count_history, threshold=3)
+    assert is_stagnant, "Expected stagnation for +/-2 fluctuation"
+    logger.info("    ✓ Stagnation detected for +/-2 fluctuation")
+    
+    # Test 5: No stagnation (change > 2)
+    logger.info("  Testing non-stagnant case (change > 2)...")
+    chapter_count_history = [10, 10, 14]
+    is_stagnant = runner._is_stagnant(chapter_count_history, threshold=3)
+    assert not is_stagnant, "Expected no stagnation for change > 2"
+    logger.info("    ✓ No stagnation for change > 2")
+    
+    # Test 6: Stagnation after initial change
     logger.info("  Testing stagnation after initial changes...")
     chapter_count_history = [8, 10, 10, 10, 10]
     is_stagnant = runner._is_stagnant(chapter_count_history, threshold=3)
     assert is_stagnant, "Expected stagnation for last 3 same counts"
     logger.info("    ✓ Stagnation detected after initial improvement")
     
-    # Test 4: Not enough history
+    # Test 7: Not enough history
     logger.info("  Testing insufficient history...")
     chapter_count_history = [10, 10]
     is_stagnant = runner._is_stagnant(chapter_count_history, threshold=3)

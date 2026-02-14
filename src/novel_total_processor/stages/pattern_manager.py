@@ -82,7 +82,7 @@ class PatternManager:
         # 4. Zero Tolerance (100% 일치 보정)
         if expected_count > 0 and stats.get('match_count', 0) != expected_count:
             logger.info(f"   🔄 [M-45] 화수 정합성 보정 중 ({stats.get('match_count')}/{expected_count})")
-            pattern = self.refine_pattern_with_goal_v3(target_file, pattern, expected_count, encoding=encoding)
+            pattern, _ = self.refine_pattern_with_goal_v3(target_file, pattern, expected_count, encoding=encoding)
             
         return (pattern, None)
     
@@ -212,12 +212,24 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
                 break
         return pattern
 
-    def refine_pattern_with_goal_v3(self, target_file: str, current_pattern: str, expected_count: int, encoding: str = 'utf-8') -> str:
-        """100% 일치를 위한 최종 보정 (v3.0 확장) - 동적 갭 분석 및 타이틀 후보 탐지 포함"""
+    def refine_pattern_with_goal_v3(self, target_file: str, current_pattern: str, expected_count: int, encoding: str = 'utf-8', max_gaps: int = 3) -> Tuple[str, int]:
+        """100% 일치를 위한 최종 보정 (v3.0 확장) - 동적 갭 분석 및 타이틀 후보 탐지 포함
+        
+        Args:
+            target_file: Target file path
+            current_pattern: Current regex pattern
+            expected_count: Expected number of chapters
+            encoding: File encoding
+            max_gaps: Maximum number of gaps to analyze (default: 3) to cap AI calls
+            
+        Returns:
+            Tuple of (refined_pattern, rejection_count)
+        """
         matches = self.splitter.find_matches_with_pos(target_file, current_pattern, encoding=encoding)
         actual_count = len(matches)
         
-        if actual_count == expected_count: return current_pattern
+        if actual_count == expected_count: 
+            return (current_pattern, 0)
         
         # 과매칭 시: 숫자 시퀀스 필터링 강화
         if actual_count > expected_count:
@@ -225,7 +237,8 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
             # 가장 확실한 숫자 패턴들 시도
             for ptn in [r"(?:제\s*)?\d+\s*화", r"\d+\s*화", r"\[\d+\]", r"Chapter\s*\d+"]:
                 s = self.splitter.verify_pattern(target_file, ptn, encoding=encoding)
-                if s['match_count'] == expected_count: return ptn
+                if s['match_count'] == expected_count: 
+                    return (ptn, 0)
         
         # 부족 시: 동적 갭 분석 및 타이틀 후보 탐지
         if actual_count < expected_count:
@@ -235,14 +248,19 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
             # Use dynamic gap detection
             gaps = self.find_dynamic_gaps(target_file, matches, expected_count)
             
+            # Limit gaps to max_gaps to cap AI calls
+            limited_gaps = gaps[:max_gaps]
+            logger.info(f"   📊 Gap 분석 제한: {len(limited_gaps)}/{len(gaps)} gaps (MAX_GAPS_TO_ANALYZE={max_gaps})")
+            
             # [Hotfix v4] 화수 퇴보 방지 (Strict Improvement Rule)
             best_pattern = current_pattern
             best_count = actual_count
             
-            # Track title candidates for fallback
+            # Track title candidates for fallback and rejection count
             all_title_candidates = []
+            rejection_count = 0
             
-            for gap in gaps:
+            for gap in limited_gaps:
                 sample = self.sampler.extract_samples_from(target_file, gap['start'], length=30000, encoding=encoding)
                 if not sample: continue
                 
@@ -258,9 +276,11 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
                         logger.info(f"   ✨ 패턴 보강 성공: {best_count}화 -> {new_count}화")
                         best_pattern = test_p
                         best_count = new_count
+                        rejection_count = 0  # Reset rejection count on success
                         if best_count == expected_count: break
                     else:
-                        logger.info(f"   ❌ 보강 패턴 거절 (화수 변화: {best_count} -> {new_count})")
+                        rejection_count += 1
+                        logger.info(f"   ❌ 보강 패턴 거절 (화수 변화: {best_count} -> {new_count}, 연속 거절: {rejection_count})")
                 
                 # If pattern didn't work, try title candidate extraction
                 if best_count < expected_count:
@@ -274,9 +294,9 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
                 # We'll pass this information back through the pattern
                 # For now, just use the improved pattern
             
-            return best_pattern
+            return (best_pattern, rejection_count)
 
-        return current_pattern
+        return (current_pattern, 0)
 
     def find_dynamic_gaps(self, target_file: str, matches: list, expected_count: int) -> list:
         """Dynamic gap detection based on average chapter size and expected count
