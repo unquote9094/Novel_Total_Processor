@@ -135,14 +135,30 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
         """AI 응답 처리 공통 로직"""
         try:
             response = self.client.generate_content(prompt)
+            
+            # Fix #2: Check for None or empty response before calling .strip()
+            if response is None or not response:
+                logger.warning("   ⚠️  AI returned None or empty response, skipping")
+                return None
+            
             # 마크다운 및 불필요 텍스트 정제
             result = response.strip().replace("```python", "").replace("```re", "").replace("```", "").replace("r'", "").replace("'", "").strip()
             if "NO_PATTERN_FOUND" in result: return None
             # 줄바꿈이 있는 경우 첫 줄만 사용
             result = result.splitlines()[0] if result else None
             
-            # [M-Hotfix] 정규식 유효성 사전 검증
+            # Fix #3: Enhanced regex validation and sanitization
             if result:
+                # Validate pattern: reject leading '?' or other invalid patterns
+                if result.startswith('?'):
+                    logger.warning(f"   ⚠️  Rejecting invalid pattern (starts with '?'): {result}")
+                    return None
+                
+                # Check for unescaped patterns that might cause issues
+                if '(?P<' in result and ')' not in result[result.index('(?P<'):]:
+                    logger.warning(f"   ⚠️  Rejecting pattern with unclosed named group: {result}")
+                    return None
+                
                 try:
                     re.compile(result)
                 except re.error as e:

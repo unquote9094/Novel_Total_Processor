@@ -169,6 +169,12 @@ Return ONLY the numeric score (e.g., 0.8). No explanation.
         
         try:
             response = self.client.generate_content(prompt)
+            
+            # Fix #2: Check for None or empty response before calling .strip()
+            if response is None or not response:
+                logger.warning("   ⚠️  AI scoring returned None or empty response, using default score 0.5")
+                return 0.5  # Default to neutral score
+            
             # Extract numeric score from response
             score_str = response.strip()
             
