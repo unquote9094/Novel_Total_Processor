@@ -22,6 +22,10 @@ class Splitter:
     - Aggressive title trimming (20-char threshold for body vs subtitle)
     """
     
+    # Multi-line title detection constants
+    BRACKET_PATTERN_LENGTH = 50  # Max length to check for bracket patterns in title candidates
+    MAX_TITLE_LENGTH = 100  # Max length to extract from matched title line
+    
     def __init__(self):
         self.title_candidates = []  # Explicit title lines for fallback splitting
     
@@ -84,7 +88,7 @@ class Splitter:
                     if pending_title_candidate and first_match_found:
                         # This is a true title following a candidate
                         # Merge them: "candidate + true_title"
-                        merged_title = f"{pending_title_candidate} | {line_stripped[:100].strip()}"
+                        merged_title = f"{pending_title_candidate} | {line_stripped[:self.MAX_TITLE_LENGTH].strip()}"
                         pending_title_candidate = None
                         
                         # Use merged title as current title
@@ -133,10 +137,11 @@ class Splitter:
                     else:
                         # 20자 이내인 경우에만 부제목으로 인정
                         # Check if this might be a title candidate (for multi-line support)
-                        if re.search(r'\[.*?\]', line_stripped[:50]):
-                            pending_title_candidate = line_stripped[:100].strip()
+                        # Bracket patterns within first N chars indicate potential multi-line title
+                        if re.search(r'\[.*?\]', line_stripped[:self.BRACKET_PATTERN_LENGTH]):
+                            pending_title_candidate = line_stripped[:self.MAX_TITLE_LENGTH].strip()
                         
-                        current_title = line_stripped[:100].strip()
+                        current_title = line_stripped[:self.MAX_TITLE_LENGTH].strip()
                         buffer = []
                     
                     current_subtitle = ""

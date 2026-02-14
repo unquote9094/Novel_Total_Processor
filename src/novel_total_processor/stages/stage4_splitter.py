@@ -24,6 +24,11 @@ logger = get_logger(__name__)
 class ChapterSplitRunner:
     """Stage 4: 챕터 분할 메인 실행기"""
     
+    # Enhanced recovery constants
+    MAX_RETRIES = 5  # Increased from 3 to support more recovery attempts
+    TITLE_CANDIDATE_RETRY_THRESHOLD = 2  # Start using title candidates after this many retries
+    MAX_GAPS_TO_ANALYZE = 3  # Limit gap analysis to top N gaps for efficiency
+    
     def __init__(self, db: Database):
         """
         Args:
@@ -176,14 +181,13 @@ class ChapterSplitRunner:
             reconciliation_log = []
             
             # Enhanced recovery loop with multi-signal detection
-            # 부족하거나(Under) 넘칠 때(Over) 모두 정밀 분석 트리거 (최대 5회 시도, 증가됨)
+            # 부족하거나(Under) 넘칠 때(Over) 모두 정밀 분석 트리거
             retry_count = 0
-            max_retries = 5  # Increased from 3 to support more recovery attempts
             title_candidates_used = False
             
-            while expected_count > 0 and len(chapters) != expected_count and retry_count < max_retries:
+            while expected_count > 0 and len(chapters) != expected_count and retry_count < self.MAX_RETRIES:
                 retry_count += 1
-                logger.error(f"   ❌ [Mismatch] 화수 불일치 감지 ({len(chapters)}/{expected_count}). 재시도({retry_count}/{max_retries})를 시작합니다.")
+                logger.error(f"   ❌ [Mismatch] 화수 불일치 감지 ({len(chapters)}/{expected_count}). 재시도({retry_count}/{self.MAX_RETRIES})를 시작합니다.")
                 
                 # 가이드 힌트 준비
                 missing = self._find_missing_episodes(chapters, expected_count)
@@ -206,7 +210,7 @@ class ChapterSplitRunner:
                     chapters = list(self.splitter.split(file_path, chapter_pattern, subtitle_pattern, encoding=encoding))
                     
                     # If still missing after pattern refinement, try title candidates (on later retries)
-                    if retry_count >= 2 and len(chapters) < expected_count:
+                    if retry_count >= self.TITLE_CANDIDATE_RETRY_THRESHOLD and len(chapters) < expected_count:
                         logger.info("   -> [Fallback] 타이틀 후보 탐지 시도 중...")
                         missing_count = expected_count - len(chapters)
                         
@@ -215,7 +219,7 @@ class ChapterSplitRunner:
                         
                         # Extract title candidates from top gaps
                         all_candidates = []
-                        for gap in gaps[:3]:  # Top 3 gaps
+                        for gap in gaps[:self.MAX_GAPS_TO_ANALYZE]:
                             sample = self.sampler.extract_samples_from(
                                 file_path, gap['start'], length=30000, encoding=encoding
                             )
