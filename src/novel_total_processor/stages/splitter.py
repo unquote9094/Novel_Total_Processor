@@ -339,14 +339,15 @@ class Splitter:
             body_lines = all_lines[start_line:end_line]
             body_text = "".join(body_lines).strip()
             
-            # Yield chapter
-            if body_text:  # Only yield if there's actual content
-                yield Chapter(
-                    cid=i,
-                    title=title,
-                    subtitle="",
-                    body=body_text,
-                    length=len(body_text)
-                )
-            else:
+            # Always yield chapter (even with empty body) to maintain exact count
+            # This ensures len(chapters) == len(boundaries)
+            if not body_text:
                 logger.warning(f"   ⚠️  Chapter {i} '{title}' has empty body (lines {start_line}-{end_line})")
+            
+            yield Chapter(
+                cid=i,
+                title=title,
+                subtitle="",
+                body=body_text,
+                length=len(body_text)
+            )
