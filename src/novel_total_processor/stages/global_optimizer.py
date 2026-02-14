@@ -26,7 +26,8 @@ class GlobalOptimizer:
         candidates: List[Dict[str, Any]],
         expected_count: int,
         file_path: str,
-        encoding: str = 'utf-8'
+        encoding: str = 'utf-8',
+        anchor_boundaries: Optional[List[Dict[str, Any]]] = None
     ) -> List[Dict[str, Any]]:
         """Select exactly expected_count boundaries using global optimization
         
@@ -81,12 +82,46 @@ class GlobalOptimizer:
         logger.info(f"   🎯 Optimizer: Selecting {expected_count} from {len(candidates)} candidates")
         logger.info(f"   📏 Min chapter distance: {min_distance/1024:.1f}KB (avg: {avg_chapter_size/1024:.1f}KB)")
         
+        # Handle anchor boundaries if provided
+        selected = []
+        if anchor_boundaries:
+            # Add byte_pos to anchors if not present
+            for anchor in anchor_boundaries:
+                if 'byte_pos' not in anchor:
+                    line_num = anchor['line_num']
+                    try:
+                        anchor['byte_pos'] = sum(len(line.encode(encoding, errors='replace')) 
+                                               for line in lines[:line_num])
+                    except:
+                        anchor['byte_pos'] = line_num * 1000  # Rough estimate
+            
+            selected = anchor_boundaries.copy()
+            remaining_needed = expected_count - len(selected)
+            
+            logger.info(f"   🔒 Anchored {len(selected)} boundaries, need {remaining_needed} more")
+            
+            # Filter candidates to exclude those near anchors
+            if remaining_needed > 0:
+                filtered_candidates = []
+                for cand in scored_candidates:
+                    is_near_anchor = False
+                    for anchor in selected:
+                        if abs(cand['byte_pos'] - anchor['byte_pos']) < min_distance:
+                            is_near_anchor = True
+                            break
+                    if not is_near_anchor:
+                        filtered_candidates.append(cand)
+                
+                scored_candidates = filtered_candidates
+                logger.info(f"   📊 Filtered to {len(scored_candidates)} candidates away from anchors")
+        else:
+            remaining_needed = expected_count
+        
         # Sort by combined score (descending)
         scored_candidates.sort(key=lambda x: x['combined_score'], reverse=True)
         
         # Greedy selection with spacing constraints
-        selected = []
-        
+
         for candidate in scored_candidates:
             # Check if we've selected enough
             if len(selected) >= expected_count:
@@ -101,34 +136,52 @@ class GlobalOptimizer:
             logger.warning(f"   ⚠️  Only found {len(selected)}/{expected_count} with strict spacing")
             logger.info(f"   🔄 Relaxing constraints to meet target count...")
             
-            # Try with reduced minimum distance
+            # Try with reduced minimum distance, keeping anchors
             relaxed_distance = int(min_distance * 0.5)
-            selected = []
+            if anchor_boundaries:
+                # Keep anchors, only re-select additional candidates
+                new_selected = anchor_boundaries.copy()
+            else:
+                new_selected = []
             
             for candidate in scored_candidates:
-                if len(selected) >= expected_count:
+                if len(new_selected) >= expected_count:
                     break
                 
-                if self._is_valid_selection(candidate, selected, relaxed_distance):
-                    selected.append(candidate)
+                if self._is_valid_selection(candidate, new_selected, relaxed_distance):
+                    new_selected.append(candidate)
+            
+            selected = new_selected
         
-        # If still not enough, just take top N by score (no spacing constraint)
+        # If still not enough, enforce absolute minimum spacing of 500 bytes
+        ABSOLUTE_MIN_SPACING = 500
         if len(selected) < expected_count:
             logger.warning(f"   ⚠️  Still only {len(selected)}/{expected_count} with relaxed spacing")
-            logger.info(f"   🔄 Using top-N selection without spacing constraints...")
+            logger.warning(f"   🔄 Using absolute minimum spacing ({ABSOLUTE_MIN_SPACING} bytes)...")
             
-            # Take top candidates by score, ensuring no duplicates
-            selected = []
-            seen_positions = set()
+            # Keep anchors if present
+            if anchor_boundaries:
+                new_selected = anchor_boundaries.copy()
+            else:
+                new_selected = []
+            
+            seen_positions = set(s['byte_pos'] for s in new_selected)
             
             for candidate in scored_candidates:
-                if len(selected) >= expected_count:
+                if len(new_selected) >= expected_count:
                     break
                 
                 pos = candidate['byte_pos']
-                if pos not in seen_positions:
-                    selected.append(candidate)
+                if pos not in seen_positions and self._is_valid_selection(candidate, new_selected, ABSOLUTE_MIN_SPACING):
+                    new_selected.append(candidate)
                     seen_positions.add(pos)
+            
+            selected = new_selected
+            
+            # If still can't meet expected count, log and return what we have
+            if len(selected) < expected_count:
+                logger.error(f"   ❌ Cannot find {expected_count} valid boundaries, returning {len(selected)}")
+
         
         # Sort by position for final output
         selected.sort(key=lambda x: x['byte_pos'])

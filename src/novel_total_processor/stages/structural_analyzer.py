@@ -118,9 +118,18 @@ class StructuralAnalyzer:
                 if len(candidates) >= max_candidates:
                     break
             
-            logger.info(f"   🔍 Structural analysis: {len(candidates)} candidates generated")
+            # Filter candidates to maintain minimum line distance
+            MIN_LINES_BETWEEN = 10
+            filtered = []
+            last_line = -MIN_LINES_BETWEEN
+            for cand in sorted(candidates, key=lambda x: x['line_num']):
+                if cand['line_num'] - last_line >= MIN_LINES_BETWEEN:
+                    filtered.append(cand)
+                    last_line = cand['line_num']
             
-            return candidates
+            logger.info(f"   🔍 Structural analysis: {len(filtered)} candidates generated (filtered from {len(candidates)} with min distance)")
+            
+            return filtered
             
         except Exception as e:
             logger.error(f"Error during structural analysis: {e}")
@@ -151,6 +160,13 @@ class StructuralAnalyzer:
             'starts_with_caps': line[0].isupper() if len(line) > 0 else False,
             'word_count': len(line.split()),
         }
+        
+        # Check for dialogue (quoted text or short exclamations)
+        features['is_dialogue'] = bool(re.match(r'^["\'"「『"\''].+["\'"」』"\'']$', line)) or \
+                                   bool(re.match(r'^.{1,40}[?!？！]$', line))
+        
+        # Check for sentence endings (but not chapter indicators)
+        features['is_sentence'] = bool(re.search(r'[.。다요죠습]$', line)) and not features.get('has_chapter_indicator')
         
         # Check for chapter indicators
         for pattern in self.indicator_patterns:
@@ -228,5 +244,11 @@ class StructuralAnalyzer:
         if features['is_all_caps'] and 5 < features['word_count'] < 15:
             score += 0.15
         
+        # Apply penalties for dialogue and sentences
+        if features.get('is_dialogue'):
+            score -= 0.4  # Strong penalty for dialogue
+        if features.get('is_sentence'):
+            score -= 0.3  # Penalty for regular sentences
+        
         # Normalize to 0-1 range
-        return min(1.0, score)
+        return min(1.0, max(0.0, score))
