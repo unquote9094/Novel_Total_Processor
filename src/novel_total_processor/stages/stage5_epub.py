@@ -339,23 +339,40 @@ p {
     ) -> tuple:
         """다중 챕터 생성 + 계층형 목차 (D-3)"""
         from novel_total_processor.stages.splitter import Splitter
+        from novel_total_processor.stages.chapter import Chapter
         
-        # Splitter로 챕터 전체 로드 (메모리 충분함 가정)
-        splitter = Splitter()
-        # chapter_pattern 등을 stage4_data에서 가져오거나 config에서 가져와야 함.
-        # file_info에 패턴 정보가 없다면 stage3 등에서 넘어왔어야 함.
-        # 일단 stage4_data에 있다고 가정.
-        # Stage 4 데이터 구조에서 패턴 추출 (patterns 키 내부에 있음)
-        patterns = stage4_data.get("patterns", {})
-        pattern = patterns.get("chapter_pattern", r"^\d+화$") 
-        subtitle_pattern = patterns.get("subtitle_pattern", None)
+        # Try to use chapters directly from Stage 4 cache
+        chapters_data = stage4_data.get("chapters", [])
+        
+        if chapters_data:
+            # Use chapters directly from Stage 4 (includes Advanced Pipeline results)
+            logger.info(f"   -> Using {len(chapters_data)} chapters from Stage 4 cache")
+            all_ch_objs = [
+                Chapter(
+                    cid=ch['cid'],
+                    title=ch['title'],
+                    subtitle=ch.get('subtitle', ''),
+                    body=ch['body'],
+                    length=ch.get('length', len(ch['body'])),
+                    chapter_type=ch.get('chapter_type', '본편')
+                )
+                for ch in chapters_data
+            ]
+        else:
+            # Fallback: Use pattern-based splitting (old behavior)
+            logger.warning("   -> Stage 4 cache has no chapter data, falling back to pattern split")
+            
+            splitter = Splitter()
+            patterns = stage4_data.get("patterns", {})
+            pattern = patterns.get("chapter_pattern", r"^\d+화$") 
+            subtitle_pattern = patterns.get("subtitle_pattern", None)
 
-        all_ch_objs = list(splitter.split(
-            file_info["file_path"],
-            pattern,
-            subtitle_pattern,
-            encoding=file_info.get("encoding", "utf-8") or "utf-8"
-        ))
+            all_ch_objs = list(splitter.split(
+                file_info["file_path"],
+                pattern,
+                subtitle_pattern,
+                encoding=file_info.get("encoding", "utf-8") or "utf-8"
+            ))
         
         if not all_ch_objs:
              raise ValueError("챕터가 추출되지 않았습니다.")

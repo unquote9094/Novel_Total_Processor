@@ -408,6 +408,7 @@ class ChapterSplitRunner:
                     "cid": ch.cid,
                     "title": ch.title,
                     "subtitle": ch.subtitle,
+                    "body": ch.body,  # Save full chapter body for Stage 5
                     "length": ch.length,
                     "chapter_type": ch.chapter_type
                 }

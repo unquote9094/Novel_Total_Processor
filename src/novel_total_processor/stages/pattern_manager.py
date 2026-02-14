@@ -88,7 +88,7 @@ class PatternManager:
     
 
     def _analyze_gap_pattern(self, sample_text: str, current_pattern: str) -> Optional[str]:
-        """[Hotfix v7] 누락 구간 전용 정밀 분석 (Context-Aware)"""
+        """[Hotfix v7] 누락 구간 전용 정밀 분석 (Context-Aware) + Enhanced with number relaxation"""
         prompt = f"""=== pattern_refinement ===
 You are an expert in Regex. We are trying to split a novel into chapters.
 We already have a pattern: `{current_pattern}`
@@ -96,34 +96,73 @@ However, we missed some chapters in the following text chunk.
 
 [Tasks]
 1. Analyze the text and find the Chapter Title pattern used inside this specific chunk.
-2. It might be slightly different from the existing pattern (e.g., "1화" vs "Chapter 1").
-3. Create a Python Regex for this NEW pattern.
-   - **DO NOT** return the existing pattern again.
-   - **DO NOT** match general sentences or page numbers.
-   - **ONLY** match headlines that look like chapter titles.
+
+2. Consider these possibilities:
+   - The same format as existing pattern, but WITHOUT number requirements
+     (e.g., if current is "< .*?\\(\\d+\\) >", try "< .*? >" for titles without numbers)
+   - A slightly different format (e.g., "1화" vs "Chapter 1" vs "Ep.1")
+   - Titles that match the visual structure but are missing numbers
+
+3. Create a Python Regex for this pattern.
+   - **EXCLUDE end markers**: Lines ending with "끝", "완", "END", "fin", "종료"
+   - **DO NOT** return the existing pattern unchanged
+   - **DO NOT** match general sentences, dialogue, or page numbers
+   - **ONLY** match headlines that look like chapter titles
+   - Make number patterns OPTIONAL with \\d* instead of \\d+ if titles vary
+
+[Current Pattern]
+{current_pattern}
 
 [Text Chunk (Missed Area)]
 {sample_text[:30000]}
 
 [Output]
-Return ONLY the raw Regex string. No markdown.
+Return ONLY the raw Regex string. No markdown, no explanations.
 """
         return self._generate_regex_from_ai(prompt)
 
     def _analyze_pattern_v3(self, sample_text: str) -> Optional[str]:
-        """NovelAIze-SSR v3.0 원본 프롬프트 복원"""
+        """NovelAIze-SSR v3.0 원본 프롬프트 복원 + Enhanced with Korean novel patterns"""
         prompt = f"""=== pattern_analysis ===
 You are an expert in Regex (Regular Expressions) and Text Analysis.
 Analyze the following Novel Text Samples and identify the Pattern used for Chapter Titles.
 
+[Common Korean Novel Chapter Formats]
+Examples of real chapter title patterns used in Korean novels:
+- Numbered: "N화", "제N화", "N회", "제N장", "Chapter N", "Ep.N", "Episode N", "N話", "第N話"
+- Bracketed: "< 제목 >", "【 제목 】", "[ 제목 ]", "[N화]", "<N화>"
+- Decorated: "― 제목 ―", "★ 제목", "◆ 제목 ◆", "■ 제목", "▣ N화"
+- Special: "프롤로그", "에필로그", "외전", "번외", "후기", "작가의 말"
+- Mixed: Some chapters may have numbers, others may not (e.g., "< 에피소드(3) >" and "< 연습생 면접 >")
+
+[CRITICAL WARNINGS]
+1. **START vs END Markers**: 
+   - Some novels use PAIRED structures: "< 제목 >" (START) and "< 제목 > 끝" (END)
+   - Your regex MUST match ONLY the START markers
+   - **EXCLUDE** any lines ending with: "끝", "완", "END", "fin", "종료", "끗", "end", "完"
+   - Use negative lookahead if needed: (?!.*끝\\s*$)
+
+2. **Number Flexibility**:
+   - Numbers may be OPTIONAL in titles
+   - Some chapters have numbers ("< 에피소드(3) >"), others don't ("< 연습생 면접 >")
+   - Do NOT require \\d+ if the pattern works without it
+
+3. **Pattern Precision**:
+   - Match complete title lines, not just fragments
+   - Avoid matching dialogue, body text, or page numbers
+   - Look for consistent formatting (brackets, spacing, decoration)
+
 [Tasks]
-1. Find all consistent patterns that denote a new chapter start.
+1. Find all consistent patterns that denote a new chapter START.
    **CRITICAL: Detect Mixed or Inconsistent patterns.**
-   If the novel uses multiple formats (e.g., some chapters use "1화", while others use "Chapter 1" or "Ep.1"), identify ALL of them.
-2. Create a Python Compatible Regular Expression (Regex) to match these chapter titles.
+   If the novel uses multiple formats (e.g., some use "1화", others use "Chapter 1"), identify ALL of them.
+
+2. Create a Python Compatible Regular Expression (Regex) to match these chapter START titles.
    - Use the `|` (OR) operator to combine multiple patterns if necessary.
-   - Use `\\s*` for flexible whitespace and `\\d+` for numbers.
-3. OUTPUT ONLY the raw Regex string. No markdown, no content.
+   - Use `\\s*` for flexible whitespace and `\\d*` or `\\d+` for numbers (make optional if needed).
+   - **MUST exclude end markers** (lines ending with "끝", "완", "END", etc.)
+
+3. OUTPUT ONLY the raw Regex string. No markdown, no explanations.
    - If no pattern found, return "NO_PATTERN_FOUND".
 
 [Novel Text Samples]
@@ -213,7 +252,11 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
         return pattern
 
     def refine_pattern_with_goal_v3(self, target_file: str, current_pattern: str, expected_count: int, encoding: str = 'utf-8', max_gaps: int = 3) -> Tuple[str, int]:
-        """100% 일치를 위한 최종 보정 (v3.0 확장) - 동적 갭 분석 및 타이틀 후보 탐지 포함
+        """100% 일치를 위한 최종 보정 (v3.0 확장) - 3-Level Escalation
+        
+        Level 1: AI regex generation (already done by caller)
+        Level 2: Code-level auto validation and fixing
+        Level 3: Direct AI title search in gaps (if Level 1+2 < 95%)
         
         Args:
             target_file: Target file path
@@ -230,6 +273,25 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
         
         if actual_count == expected_count: 
             return (current_pattern, 0)
+        
+        # Level 2: Auto-validation and fixing (before AI pattern refinement)
+        if expected_count > 0 and actual_count != expected_count:
+            logger.info(f"   🔧 Applying Level 2 auto-validation...")
+            auto_fixed_pattern, auto_count = self.auto_validate_and_fix(
+                target_file, current_pattern, expected_count, encoding
+            )
+            
+            # If auto-fix achieved the goal, return immediately
+            if auto_count == expected_count:
+                logger.info(f"   ✅ [Level 2 Success] Auto-fix achieved target: {auto_count}/{expected_count}")
+                return (auto_fixed_pattern, 0)
+            
+            # If auto-fix improved significantly, use it as the new baseline
+            if auto_count > actual_count:
+                logger.info(f"   ✨ [Level 2 Improved] Using auto-fixed pattern: {actual_count} -> {auto_count}")
+                current_pattern = auto_fixed_pattern
+                actual_count = auto_count
+                matches = self.splitter.find_matches_with_pos(target_file, current_pattern, encoding=encoding)
         
         # 과매칭 시: 숫자 시퀀스 필터링 강화
         if actual_count > expected_count:
@@ -387,9 +449,16 @@ Return ONLY the actual title lines, one per line, nothing else.
 
 A chapter title is:
 - Usually short (1-50 characters)
-- Contains numbers, episode markers, or chapter indicators
+- May or may not contain numbers (both are valid)
+- May contain episode markers or chapter indicators
 - Stands out from regular narrative text
 - May use brackets, special formatting, or numbering
+- Examples: "< 제목 >", "제3화", "Chapter 5", "프롤로그", "에필로그(1)"
+
+**IMPORTANT**: 
+- Titles WITHOUT numbers are equally valid as titles WITH numbers
+- DO NOT exclude titles just because they lack numbers
+- EXCLUDE lines ending with "끝", "완", "END", "fin" (these are END markers, not titles)
 
 [Current Pattern Context]
 We already found some chapters with pattern: {current_pattern}
@@ -434,6 +503,293 @@ If no titles found, return "NO_TITLES_FOUND".
         
         return consensus_candidates
 
+    def auto_validate_and_fix(
+        self, 
+        target_file: str, 
+        current_pattern: str, 
+        expected_count: int,
+        encoding: str = 'utf-8'
+    ) -> Tuple[str, int]:
+        """Level 2: Code-level automatic validation and fixing (no AI calls)
+        
+        Automatically detects and fixes common pattern issues:
+        1. End marker contamination (lines ending with "끝", "완", "END", etc.)
+        2. Close duplicate matches (start/end pairs too close together)
+        3. Number requirement relaxation (remove \\d+ to match unnumbered titles)
+        4. Negative lookahead for end marker exclusion
+        
+        Args:
+            target_file: Path to target file
+            current_pattern: Current regex pattern
+            expected_count: Expected number of chapters
+            encoding: File encoding
+            
+        Returns:
+            Tuple of (cleaned_pattern, match_count)
+        """
+        logger.info("   🔧 [Level 2] Auto-validation and fixing pattern...")
+        
+        # Get initial matches with their text content
+        matches = self._find_matches_with_text(target_file, current_pattern, encoding)
+        initial_count = len(matches)
+        
+        logger.info(f"   📊 Initial matches: {initial_count}")
+        
+        # Step 1: Detect and separate end markers
+        end_keywords = ['끝', '완', 'END', 'end', 'fin', 'Fin', '종료', '끗', '完']
+        start_matches, end_matches = self._separate_start_end_matches(matches, end_keywords)
+        
+        if end_matches:
+            logger.info(f"   ⚠️  Detected {len(end_matches)} end markers in matches")
+            logger.info(f"   ✂️  Removed end markers: {initial_count} -> {len(start_matches)} matches")
+            matches = start_matches
+        
+        # Step 2: Remove close duplicates (likely start/end pairs)
+        MIN_GAP = 500  # Minimum 500 chars between chapter starts
+        cleaned_matches = self._remove_close_duplicates(matches, MIN_GAP)
+        
+        if len(cleaned_matches) < len(matches):
+            logger.info(f"   🔍 Removed {len(matches) - len(cleaned_matches)} close duplicates")
+            matches = cleaned_matches
+        
+        current_count = len(matches)
+        logger.info(f"   📊 After cleanup: {current_count} matches")
+        
+        # Step 3: If still under 95% of expected, try relaxing number requirements
+        if expected_count > 0 and current_count < expected_count * 0.95:
+            relaxed_pattern = self._relax_number_requirement(current_pattern)
+            
+            if relaxed_pattern != current_pattern:
+                logger.info(f"   🔄 Trying relaxed pattern (numbers optional)...")
+                logger.info(f"   Old: {current_pattern}")
+                logger.info(f"   New: {relaxed_pattern}")
+                
+                # Test relaxed pattern
+                relaxed_matches = self._find_matches_with_text(target_file, relaxed_pattern, encoding)
+                # Clean end markers again
+                relaxed_matches, _ = self._separate_start_end_matches(relaxed_matches, end_keywords)
+                relaxed_matches = self._remove_close_duplicates(relaxed_matches, MIN_GAP)
+                
+                relaxed_count = len(relaxed_matches)
+                logger.info(f"   📊 Relaxed pattern matches: {relaxed_count}")
+                
+                # Accept if improved and not over-matching (with 5% tolerance)
+                if relaxed_count > current_count and relaxed_count <= expected_count * 1.05:
+                    logger.info(f"   ✅ Relaxed pattern accepted: {current_count} -> {relaxed_count}")
+                    current_pattern = relaxed_pattern
+                    current_count = relaxed_count
+                else:
+                    logger.info(f"   ❌ Relaxed pattern rejected (over-match or no improvement)")
+        
+        # Step 4: Add negative lookahead for end markers if not present
+        if any(keyword in current_pattern for keyword in end_keywords):
+            # Pattern already has end marker logic, skip
+            pass
+        else:
+            # Add negative lookahead to exclude end markers
+            enhanced_pattern = self._add_end_marker_exclusion(current_pattern, end_keywords)
+            if enhanced_pattern != current_pattern:
+                logger.info(f"   🛡️  Added end marker exclusion to pattern")
+                current_pattern = enhanced_pattern
+        
+        logger.info(f"   ✅ [Level 2] Auto-validation complete: {current_count} matches")
+        
+        return current_pattern, current_count
+    
+    def _find_matches_with_text(self, target_file: str, pattern: str, encoding: str) -> List[Dict[str, Any]]:
+        """Find pattern matches with their text content"""
+        matches = []
+        try:
+            compiled_pattern = re.compile(pattern)
+            with open(target_file, 'r', encoding=encoding, errors='replace') as f:
+                pos = 0
+                for line_num, line in enumerate(f):
+                    if compiled_pattern.search(line.strip()):
+                        matches.append({
+                            'pos': pos,
+                            'line_num': line_num,
+                            'text': line.strip()
+                        })
+                    pos += len(line.encode(encoding, errors='replace'))
+        except Exception as e:
+            logger.warning(f"   ⚠️  Error finding matches: {e}")
+        
+        return matches
+    
+    def _separate_start_end_matches(
+        self, 
+        matches: List[Dict[str, Any]], 
+        end_keywords: List[str]
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Separate start markers from end markers"""
+        start_matches = []
+        end_matches = []
+        
+        for match in matches:
+            text = match['text']
+            # Check if line ends with any end keyword
+            is_end = False
+            for keyword in end_keywords:
+                # Check for keyword at end of line (with optional whitespace/punctuation)
+                if re.search(rf'{keyword}\s*[>】\])\)]*\s*$', text):
+                    is_end = True
+                    break
+            
+            if is_end:
+                end_matches.append(match)
+            else:
+                start_matches.append(match)
+        
+        return start_matches, end_matches
+    
+    def _remove_close_duplicates(
+        self, 
+        matches: List[Dict[str, Any]], 
+        min_gap: int
+    ) -> List[Dict[str, Any]]:
+        """Remove matches that are too close together (likely start/end pairs)"""
+        if not matches:
+            return matches
+        
+        cleaned = [matches[0]]  # Keep first match
+        
+        for i in range(1, len(matches)):
+            gap = matches[i]['pos'] - matches[i-1]['pos']
+            if gap >= min_gap:
+                cleaned.append(matches[i])
+            else:
+                logger.debug(f"   Removing close duplicate: '{matches[i]['text']}' (gap: {gap} chars)")
+        
+        return cleaned
+    
+    def _relax_number_requirement(self, pattern: str) -> str:
+        """Relax number requirements in pattern (\\d+ -> \\d*)"""
+        # Replace \\d+ with \\d* to make numbers optional
+        # But keep at least one \\d somewhere if pattern has multiple number groups
+        
+        # Simple strategy: replace all \\d+ with \\d*
+        relaxed = pattern.replace(r'\d+', r'\d*')
+        
+        # If pattern becomes too loose (no digits required at all), try a hybrid approach
+        # Keep the first \\d+ and relax the rest
+        if r'\d' not in relaxed:
+            # Pattern has no digit requirements, return original
+            return pattern
+        
+        return relaxed
+    
+    def _add_end_marker_exclusion(self, pattern: str, end_keywords: List[str]) -> str:
+        """Add negative lookahead to exclude end markers"""
+        # Create a negative lookahead pattern for all end keywords
+        # Pattern: (?!.*(?:끝|완|END|fin)\\s*$)
+        
+        exclusion_pattern = '|'.join(re.escape(kw) for kw in end_keywords)
+        negative_lookahead = f'(?!.*(?:{exclusion_pattern})\\s*[>】\\])\\)]*\\s*$)'
+        
+        # Add at the beginning of the pattern if not already present
+        if '(?!' not in pattern:
+            enhanced = negative_lookahead + pattern
+            return enhanced
+        
+        return pattern
+
+        return consensus_candidates
+
+    
+    def direct_ai_title_search(
+        self,
+        target_file: str,
+        current_pattern: str,
+        expected_count: int,
+        existing_matches: List[Dict[str, Any]],
+        encoding: str = 'utf-8'
+    ) -> List[str]:
+        """Level 3: Direct AI title search in gap regions
+        
+        When Level 1 (regex) and Level 2 (auto-fix) don't achieve 95% accuracy,
+        ask AI to directly find chapter titles in the missing regions.
+        
+        Args:
+            target_file: Path to target file
+            current_pattern: Current pattern (for context)
+            expected_count: Expected number of chapters
+            existing_matches: Already found matches with position and text
+            encoding: File encoding
+            
+        Returns:
+            List of title lines found by AI
+        """
+        logger.info("   🔍 [Level 3] Direct AI title search in gap regions...")
+        
+        # Find gap regions
+        gaps = self.find_dynamic_gaps(target_file, existing_matches, expected_count)
+        
+        if not gaps:
+            logger.info("   ℹ️  No significant gaps found")
+            return []
+        
+        # Get a few examples of existing titles
+        example_titles = [m['text'] for m in existing_matches[:5]]
+        
+        all_found_titles = []
+        
+        # Search in each gap
+        for i, gap in enumerate(gaps[:3]):  # Limit to top 3 gaps
+            logger.info(f"   🔎 Searching gap {i+1}/{min(len(gaps), 3)} (size: {gap['size']/1024:.1f}KB)")
+            
+            # Extract text from gap region
+            gap_text = self.sampler.extract_samples_from(
+                target_file, gap['start'], length=min(50000, gap['size']), encoding=encoding
+            )
+            
+            if not gap_text:
+                continue
+            
+            # Ask AI to find titles directly
+            prompt = f"""=== direct_title_search ===
+You are an expert in Korean novel structure analysis.
+
+[Task]
+Find ALL chapter title lines in the text below.
+Look at the examples and find similar titles in the text.
+
+[Examples of Chapter Titles Already Found]
+{chr(10).join(f'- {title}' for title in example_titles)}
+
+[Instructions]
+1. Find lines with the SAME format/structure as the examples
+2. Include titles WITH numbers and WITHOUT numbers (both are valid)
+3. EXCLUDE lines ending with "끝", "완", "END", "fin" (end markers)
+4. EXCLUDE dialogue, body text, and page numbers
+5. Return ONLY the actual title lines found
+
+[Text to Search]
+{gap_text}
+
+[Output]
+List each found title on a separate line.
+If no titles found, return "NO_TITLES_FOUND".
+"""
+            
+            try:
+                response = self.client.generate_content(prompt)
+                if response and "NO_TITLES_FOUND" not in response:
+                    found = [line.strip() for line in response.strip().split('\n') 
+                            if line.strip() and len(line.strip()) < 100]
+                    
+                    if found:
+                        logger.info(f"   ✨ Found {len(found)} titles in gap {i+1}: {found[:3]}...")
+                        all_found_titles.extend(found)
+                
+                time.sleep(0.5)  # Rate limiting
+                
+            except Exception as e:
+                logger.warning(f"   ⚠️  Direct search in gap {i+1} failed: {e}")
+        
+        logger.info(f"   📝 [Level 3] Total titles found: {len(all_found_titles)}")
+        
+        return all_found_titles
+    
     def _try_fallback(self, target_file: str, encoding: str = 'utf-8') -> Tuple[Optional[str], Optional[str]]:
         for ptn in [r"\d+\s*화", r"제\s*\d+\s*화", r"\[\d+\]"]:
             stats = self.splitter.verify_pattern(target_file, ptn, encoding=encoding)
