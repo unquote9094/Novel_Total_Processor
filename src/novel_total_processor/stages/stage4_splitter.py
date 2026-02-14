@@ -39,6 +39,13 @@ class ChapterSplitRunner:
     MAX_RETRIES = 5  # Increased from 3 to support more recovery attempts
     TITLE_CANDIDATE_RETRY_THRESHOLD = 2  # Start using title candidates after this many retries
     MAX_GAPS_TO_ANALYZE = 3  # Limit gap analysis to top N gaps for efficiency
+    ESTIMATED_AVG_LINE_BYTES = 1000  # Estimated average bytes per line for position calculations
+    
+    # Quality validation constants
+    MIN_VALID_CHAPTER_LENGTH = 100  # Minimum characters for a valid chapter
+    MAX_EMPTY_CHAPTER_RATIO = 0.1  # Maximum ratio of empty chapters (10%)
+    MIN_AVG_CHAPTER_LENGTH = 500  # Minimum average chapter length in characters
+    MIN_DISTANCE_FROM_ANCHOR = 10  # Minimum line distance from anchors when filtering candidates
     
     def __init__(self, db: Database):
         """
@@ -406,12 +413,31 @@ class ChapterSplitRunner:
                     logger.warning(f"   🚀 Step 2: Activating Advanced Escalation Pipeline (fallback)...")
                     logger.warning("=" * 60)
                     
-                    # Try advanced escalation
+                    # Convert pattern-based matches to anchor boundaries
+                    anchor_boundaries = None
+                    if existing_matches:
+                        logger.info(f"   🔧 Converting {len(existing_matches)} pattern matches to anchor boundaries...")
+                        anchor_boundaries = []
+                        
+                        for match in existing_matches:
+                            # Convert pos to line_num
+                            line_num = self._pos_to_line_num(file_path, match['pos'], encoding)
+                            anchor_boundaries.append({
+                                'line_num': line_num,
+                                'text': match['title'],
+                                'confidence': 1.0,  # Pattern matches have high confidence
+                                'byte_pos': match['pos']
+                            })
+                        
+                        logger.info(f"   ✅ Created {len(anchor_boundaries)} anchor boundaries from pattern matches")
+                    
+                    # Try advanced escalation with anchors
                     advanced_chapters = self._advanced_escalation_pipeline(
                         file_path,
                         expected_count,
                         encoding,
-                        reconciliation_log
+                        reconciliation_log,
+                        anchor_boundaries=anchor_boundaries
                     )
                     
                     if advanced_chapters and len(advanced_chapters) == expected_count:
@@ -491,7 +517,8 @@ class ChapterSplitRunner:
         file_path: str,
         expected_count: int,
         encoding: str,
-        reconciliation_log: List[str]
+        reconciliation_log: List[str],
+        anchor_boundaries: Optional[List[Dict[str, Any]]] = None
     ) -> Optional[List[Chapter]]:
         """Advanced Stage 4 escalation pipeline with AI-scored candidates and global optimization
         
@@ -517,6 +544,11 @@ class ChapterSplitRunner:
             logger.info("   🚀 ADVANCED ESCALATION PIPELINE ACTIVATED")
             logger.info("=" * 70)
             
+            # Log anchor information if present
+            if anchor_boundaries:
+                logger.info(f"   🔒 Using {len(anchor_boundaries)} anchor boundaries from pattern matching")
+                reconciliation_log.append(f"Anchors: {len(anchor_boundaries)} pattern matching results fixed")
+            
             # Stage 1: Generate structural candidates
             logger.info("   📊 [Pipeline Stage 1/5] Structural transition point analysis...")
             logger.info(f"      → Analyzing file structure for chapter boundaries")
@@ -532,6 +564,23 @@ class ChapterSplitRunner:
             
             logger.info(f"   ✅ [Stage 1 Complete] Generated {len(candidates)} structural candidates")
             reconciliation_log.append(f"구조 분석: {len(candidates)} 후보 생성")
+            
+            # Filter out candidates near anchors to reduce AI scoring load
+            if anchor_boundaries and len(candidates) > 200:
+                logger.info(f"   🔧 Filtering candidates near anchors to reduce AI scoring load...")
+                filtered_candidates = []
+                
+                for cand in candidates:
+                    is_near_anchor = False
+                    for anchor in anchor_boundaries:
+                        if abs(cand['line_num'] - anchor['line_num']) < self.MIN_DISTANCE_FROM_ANCHOR:
+                            is_near_anchor = True
+                            break
+                    if not is_near_anchor:
+                        filtered_candidates.append(cand)
+                
+                logger.info(f"   📊 Filtered from {len(candidates)} to {len(filtered_candidates)} candidates")
+                candidates = filtered_candidates
             
             # Stage 2: AI scoring (optional, can be expensive for large candidate sets)
             # Only score if we have a reasonable number of candidates
@@ -577,7 +626,8 @@ class ChapterSplitRunner:
                 candidates,
                 expected_count,
                 file_path,
-                encoding=encoding
+                encoding=encoding,
+                anchor_boundaries=anchor_boundaries
             )
             
             if not selected:
@@ -629,6 +679,24 @@ class ChapterSplitRunner:
                 logger.warning(f"   ⚠️  [Stage 5 Partial] Created {len(chapters)}/{len(selected)} chapters")
             else:
                 logger.info(f"   ✅ [Stage 5 Complete] Created {len(chapters)} chapters from {len(selected)} boundaries")
+            
+            # Quality validation: check for too many empty chapters
+            if chapters:
+                empty_count = sum(1 for ch in chapters if ch.length < self.MIN_VALID_CHAPTER_LENGTH)
+                empty_ratio = empty_count / len(chapters)
+                if empty_ratio > self.MAX_EMPTY_CHAPTER_RATIO:
+                    logger.error(f"   ❌ Quality check FAILED: {empty_count}/{len(chapters)} chapters <{self.MIN_VALID_CHAPTER_LENGTH} chars ({empty_ratio*100:.0f}%)")
+                    logger.error(f"   🚫 Advanced pipeline rejected due to too many empty chapters")
+                    return None
+                
+                avg_length = sum(ch.length for ch in chapters) / len(chapters)
+                if avg_length < self.MIN_AVG_CHAPTER_LENGTH:
+                    logger.error(f"   ❌ Quality check FAILED: avg chapter length = {avg_length:.0f} chars")
+                    logger.error(f"   🚫 Advanced pipeline rejected due to low average chapter length")
+                    return None
+                
+                logger.info(f"   ✅ Quality check PASSED: avg length = {avg_length:.0f} chars, empty ratio = {empty_ratio*100:.1f}%")
+            
             logger.info("=" * 70)
             logger.info(f"   🎉 ADVANCED PIPELINE COMPLETE: {len(chapters)} chapters extracted")
             logger.info("=" * 70)
@@ -641,6 +709,36 @@ class ChapterSplitRunner:
             logger.error("=" * 70)
             traceback.print_exc()
             return None
+    
+    def _pos_to_line_num(self, file_path: str, pos: int, encoding: str = 'utf-8') -> int:
+        """Convert byte position to line number
+        
+        Args:
+            file_path: Path to the file
+            pos: Byte position
+            encoding: File encoding
+            
+        Returns:
+            Line number (0-indexed) corresponding to the byte position
+        """
+        try:
+            with open(file_path, 'r', encoding=encoding, errors='replace') as f:
+                lines = f.readlines()
+            
+            current_pos = 0
+            for i, line in enumerate(lines):
+                line_bytes = len(line.encode(encoding, errors='replace'))
+                if current_pos + line_bytes > pos:
+                    return i
+                current_pos += line_bytes
+            
+            # If position is beyond file, return last line
+            return len(lines) - 1 if lines else 0
+            
+        except Exception as e:
+            logger.warning(f"Could not convert pos to line_num: {e}")
+            # Fallback: estimate line number based on average bytes per line
+            return pos // self.ESTIMATED_AVG_LINE_BYTES
     
     def _analyze_chapter_types(self, chapters: List[Chapter]) -> Dict[str, Any]:
         """챕터 제목 분석하여 본편/외전/에필로그 분류

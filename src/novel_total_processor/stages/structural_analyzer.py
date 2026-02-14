@@ -25,6 +25,8 @@ class StructuralAnalyzer:
     LONG_LINE_THRESHOLD = 200  # Long lines are likely body text
     MIN_BLANK_LINES = 1  # Minimum blank lines before a potential chapter
     CONTEXT_LINES = 3  # Lines to check before/after for context
+    MAX_DIALOGUE_LENGTH = 40  # Maximum length for short dialogue/exclamation detection
+    MIN_LINES_BETWEEN = 10  # Minimum line distance between candidates
     
     # Punctuation patterns that suggest chapter boundaries
     CHAPTER_INDICATORS = [
@@ -118,9 +120,17 @@ class StructuralAnalyzer:
                 if len(candidates) >= max_candidates:
                     break
             
-            logger.info(f"   🔍 Structural analysis: {len(candidates)} candidates generated")
+            # Filter candidates to maintain minimum line distance
+            filtered = []
+            last_line = -self.MIN_LINES_BETWEEN
+            for cand in sorted(candidates, key=lambda x: x['line_num']):
+                if cand['line_num'] - last_line >= self.MIN_LINES_BETWEEN:
+                    filtered.append(cand)
+                    last_line = cand['line_num']
             
-            return candidates
+            logger.info(f"   🔍 Structural analysis: {len(filtered)} candidates generated (filtered from {len(candidates)} with min distance)")
+            
+            return filtered
             
         except Exception as e:
             logger.error(f"Error during structural analysis: {e}")
@@ -152,11 +162,19 @@ class StructuralAnalyzer:
             'word_count': len(line.split()),
         }
         
-        # Check for chapter indicators
+        # Check for chapter indicators first (needed for sentence detection)
         for pattern in self.indicator_patterns:
             if pattern.search(line):
                 features['has_chapter_indicator'] = True
                 break
+        
+        # Check for dialogue (quoted text or short exclamations)
+        dialogue_pattern = f'^.{{1,{self.MAX_DIALOGUE_LENGTH}}}[?!？！]$'
+        features['is_dialogue'] = bool(re.match(r'^["\'「『"].+["\'」』"]$', line)) or \
+                                   bool(re.match(dialogue_pattern, line))
+        
+        # Check for sentence endings (but not chapter indicators)
+        features['is_sentence'] = bool(re.search(r'[.。다요죠습]$', line)) and not features['has_chapter_indicator']
         
         # Check for time/place markers
         for pattern in self.time_place_patterns:
@@ -228,5 +246,13 @@ class StructuralAnalyzer:
         if features['is_all_caps'] and 5 < features['word_count'] < 15:
             score += 0.15
         
-        # Normalize to 0-1 range
-        return min(1.0, score)
+        # Apply penalties for dialogue and sentences
+        # Note: Penalties can drive scores negative before clamping to [0, 1]
+        # This ensures dialogue/sentences are strongly discouraged as candidates
+        if features.get('is_dialogue'):
+            score -= 0.4  # Strong penalty for dialogue
+        if features.get('is_sentence'):
+            score -= 0.3  # Penalty for regular sentences
+        
+        # Normalize to 0-1 range (clamp both lower and upper bounds)
+        return min(1.0, max(0.0, score))
