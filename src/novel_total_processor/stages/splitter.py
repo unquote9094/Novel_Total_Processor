@@ -1,7 +1,7 @@
-"""텍스트 분할기 (Reference v3.0 기반 고도화)
+"""Splitter for Chapter Text
 
-Regex 패턴을 사용하여 대용량 텍스트 파일을 챕터 단위로 분할
-Aggressive Title Trimming: 제목과 본문의 엄격한 분리 (20자 기준)
+Regex pattern-based text splitter with support for explicit title candidates.
+Enhanced with permissive pattern detection to avoid matching body text as titles.
 """
 
 import re
@@ -21,6 +21,9 @@ class Splitter:
     - Multi-line title support (merge title candidate + true title)
     - Aggressive title trimming (20-char threshold for body vs subtitle)
     """
+    
+    # Permissive patterns that match any non-empty line
+    PERMISSIVE_PATTERNS = [r'.+', r'.', r'.*']
     
     # Multi-line title detection constants
     # BRACKET_PATTERN_LENGTH: Check first 50 chars for bracket patterns to detect multi-line titles
@@ -54,11 +57,25 @@ class Splitter:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
         
+        # Save pattern for permissiveness check
+        pattern_str = chapter_pattern
+        
         try:
             pattern = re.compile(chapter_pattern)
             subtitle_re = re.compile(subtitle_pattern) if subtitle_pattern else None
         except re.error as e:
             raise ValueError(f"Invalid Regex Pattern: {e}")
+        
+        # When using explicit title_candidates, we should not filter body text aggressively
+        # The permissive pattern is only for detection, not for filtering
+        using_explicit_titles = bool(title_candidates)
+        
+        # Check if pattern is permissive (matches any line)
+        is_permissive_pattern = (pattern_str in self.PERMISSIVE_PATTERNS)
+        
+        # Debug logging for title_candidates mode
+        if using_explicit_titles:
+            logger.info(f"   🔍 Splitter mode: {len(title_candidates)} title_candidates, pattern='{pattern_str}' ({'permissive' if is_permissive_pattern else 'specific'})")
         
         buffer = []
         current_title = ""
@@ -86,7 +103,15 @@ class Splitter:
                 # 정규식 매칭 (제목 여부 확인) or explicit title
                 match = pattern.search(line_stripped)
                 
-                if match or is_explicit_title:
+                # When using explicit titles with a permissive pattern (.+),
+                # ONLY use explicit title matching to avoid matching all lines
+                # But if pattern is specific (not permissive), use both methods
+                if using_explicit_titles and is_permissive_pattern:
+                    is_chapter_boundary = is_explicit_title
+                else:
+                    is_chapter_boundary = match or is_explicit_title
+                
+                if is_chapter_boundary:
                     # Check for multi-line title pattern
                     # If we have a pending candidate and this is also a match,
                     # merge them into one title
@@ -106,11 +131,17 @@ class Splitter:
                         body_text = "".join(buffer).strip()
                         
                         # 본문 내 불필요한 제목 패턴 라인 제거
-                        body_lines = body_text.splitlines()
-                        body_text = "\n".join([bl for bl in body_lines if not pattern.search(bl.strip())]).strip()
+                        # IMPORTANT: When using explicit title_candidates with permissive pattern,
+                        # skip this filtering to avoid removing all body text
+                        # But allow it for specific patterns combined with title_candidates
+                        if not (using_explicit_titles and is_permissive_pattern):
+                            body_lines = body_text.splitlines()
+                            body_text = "\n".join([bl for bl in body_lines if not pattern.search(bl.strip())]).strip()
                         
                         # [M-45] 가짜 챕터 가드 (번호 없는 초단문 병합)
-                        if len(body_text) < 100 and not re.search(r'\d+', current_title):
+                        # IMPORTANT: Skip this guard when using explicit title_candidates with permissive pattern
+                        # The boundaries from advanced pipeline are already validated
+                        if not (using_explicit_titles and is_permissive_pattern) and len(body_text) < 100 and not re.search(r'\d+', current_title):
                             buffer = [f"\n{current_title}\n", body_text + "\n"]
                         else:
                             if body_text:
@@ -127,29 +158,32 @@ class Splitter:
                     first_match_found = True
                     
                     # [Smart Trimming] 제목 뒤에 본문이 딸려오는 현상 차단
-                    if match:
-                        core_match_text = line_stripped[:match.end()].strip()
-                        tail_text = line_stripped[match.end():].strip()
-                    else:
-                        # Explicit title candidate
-                        core_match_text = line_stripped
-                        tail_text = ""
-                    
-                    # 제목 뒷부분이 20자를 넘으면 100% 본문으로 간주 (v3.0 개선안)
-                    if len(tail_text) > 20:
-                        current_title = core_match_text
-                        buffer = [tail_text + "\n"]
-                    else:
-                        # 20자 이내인 경우에만 부제목으로 인정
-                        # Check if this might be a title candidate (for multi-line support)
-                        # Bracket patterns within first N chars indicate potential multi-line title
-                        if re.search(r'\[.*?\]', line_stripped[:self.BRACKET_PATTERN_LENGTH]):
-                            pending_title_candidate = line_stripped[:self.MAX_TITLE_LENGTH].strip()
-                        
+                    # When using explicit titles, we already have the exact title text
+                    if using_explicit_titles:
+                        # Use the exact title from candidates - no trimming needed
                         current_title = line_stripped[:self.MAX_TITLE_LENGTH].strip()
                         buffer = []
+                        current_subtitle = ""
+                    elif match:
+                        core_match_text = line_stripped[:match.end()].strip()
+                        tail_text = line_stripped[match.end():].strip()
+                        
+                        # 제목 뒷부분이 20자를 넘으면 100% 본문으로 간주 (v3.0 개선안)
+                        if len(tail_text) > 20:
+                            current_title = core_match_text
+                            buffer = [tail_text + "\n"]
+                        else:
+                            # 20자 이내인 경우에만 부제목으로 인정
+                            # Check if this might be a title candidate (for multi-line support)
+                            # Bracket patterns within first N chars indicate potential multi-line title
+                            if re.search(r'\[.*?\]', line_stripped[:self.BRACKET_PATTERN_LENGTH]):
+                                pending_title_candidate = line_stripped[:self.MAX_TITLE_LENGTH].strip()
+                            
+                            current_title = line_stripped[:self.MAX_TITLE_LENGTH].strip()
+                            buffer = []
+                        
+                        current_subtitle = ""
                     
-                    current_subtitle = ""
                     continue
                 
                 elif first_match_found:
