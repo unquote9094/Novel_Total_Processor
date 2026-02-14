@@ -67,10 +67,12 @@ class Splitter:
         # The permissive pattern is only for detection, not for filtering
         using_explicit_titles = bool(title_candidates)
         
+        # Check if pattern is permissive (matches any line)
+        is_permissive_pattern = (pattern_str in [r'.+', r'.', r'.*'])
+        
         # Debug logging for title_candidates mode
         if using_explicit_titles:
-            is_permissive = pattern_str in [r'.+', r'.', r'.*']
-            logger.info(f"   🔍 Splitter mode: {len(title_candidates)} title_candidates, pattern='{pattern_str}' ({'permissive' if is_permissive else 'specific'})")
+            logger.info(f"   🔍 Splitter mode: {len(title_candidates)} title_candidates, pattern='{pattern_str}' ({'permissive' if is_permissive_pattern else 'specific'})")
         
         buffer = []
         current_title = ""
@@ -101,8 +103,6 @@ class Splitter:
                 # When using explicit titles with a permissive pattern (.+),
                 # ONLY use explicit title matching to avoid matching all lines
                 # But if pattern is specific (not permissive), use both methods
-                is_permissive_pattern = (pattern_str in [r'.+', r'.', r'.*'])
-                
                 if using_explicit_titles and is_permissive_pattern:
                     is_chapter_boundary = is_explicit_title
                 else:
@@ -131,7 +131,6 @@ class Splitter:
                         # IMPORTANT: When using explicit title_candidates with permissive pattern,
                         # skip this filtering to avoid removing all body text
                         # But allow it for specific patterns combined with title_candidates
-                        is_permissive_pattern = (pattern_str in [r'.+', r'.', r'.*'])
                         if not (using_explicit_titles and is_permissive_pattern):
                             body_lines = body_text.splitlines()
                             body_text = "\n".join([bl for bl in body_lines if not pattern.search(bl.strip())]).strip()
@@ -139,7 +138,6 @@ class Splitter:
                         # [M-45] 가짜 챕터 가드 (번호 없는 초단문 병합)
                         # IMPORTANT: Skip this guard when using explicit title_candidates with permissive pattern
                         # The boundaries from advanced pipeline are already validated
-                        is_permissive_pattern = (pattern_str in [r'.+', r'.', r'.*'])
                         if not (using_explicit_titles and is_permissive_pattern) and len(body_text) < 100 and not re.search(r'\d+', current_title):
                             buffer = [f"\n{current_title}\n", body_text + "\n"]
                         else:
@@ -181,11 +179,6 @@ class Splitter:
                             current_title = line_stripped[:self.MAX_TITLE_LENGTH].strip()
                             buffer = []
                         
-                        current_subtitle = ""
-                    else:
-                        # Explicit title candidate (old path, shouldn't reach here anymore)
-                        current_title = line_stripped[:self.MAX_TITLE_LENGTH].strip()
-                        buffer = []
                         current_subtitle = ""
                     
                     continue

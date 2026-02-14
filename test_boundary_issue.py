@@ -12,7 +12,10 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 import unittest.mock as mock
 
 class MockGeminiClient:
-    """Mock Gemini client for testing"""
+    """Mock Gemini client for testing
+    
+    Returns string values like the real API, which are parsed to floats by the scorer.
+    """
     def generate_content(self, prompt):
         if 'likelihood' in prompt.lower() or 'score' in prompt.lower():
             if '화' in prompt or 'Chapter' in prompt or '[' in prompt:
