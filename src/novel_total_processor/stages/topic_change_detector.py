@@ -182,6 +182,12 @@ Return ONLY the numeric score. No explanation.
         
         try:
             response = self.client.generate_content(prompt)
+            
+            # Fix #2: Check for None or empty response before calling .strip()
+            if response is None or not response:
+                logger.warning("   ⚠️  Topic change detection returned None or empty response, using default score 0.5")
+                return 0.5
+            
             score_str = response.strip()
             
             # Extract score

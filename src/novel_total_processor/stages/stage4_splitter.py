@@ -2,6 +2,10 @@
 
 AI 패턴 분석 → 정규식 → 챕터 분할 → 본편/외전 분류
 NovelAIze-SSR v3.0 포팅 + 챕터 제목 분석 추가
+
+NOTE: Pattern recognition and generation uses GeminiClient only.
+Perplexity is NOT used for pattern analysis - it's reserved for
+Stage 1 metadata search/grounding only.
 """
 
 import json
@@ -249,9 +253,23 @@ class ChapterSplitRunner:
             retry_count = 0
             title_candidates_used = False
             
+            # Fix #4: Track chapter count history for stagnation detection
+            chapter_count_history = []
+            STAGNATION_THRESHOLD = 3  # Number of attempts with no change to trigger escalation
+            
             while expected_count > 0 and len(chapters) != expected_count and retry_count < self.MAX_RETRIES:
                 retry_count += 1
                 logger.error(f"   ❌ [Mismatch] 화수 불일치 감지 ({len(chapters)}/{expected_count}). 재시도({retry_count}/{self.MAX_RETRIES})를 시작합니다.")
+                
+                # Fix #4: Check for stagnation (no chapter count change for 3 consecutive attempts)
+                chapter_count_history.append(len(chapters))
+                if self._is_stagnant(chapter_count_history, STAGNATION_THRESHOLD):
+                    logger.warning("=" * 60)
+                    logger.warning(f"   🚨 Stagnation detected: no chapter count change for {STAGNATION_THRESHOLD} attempts")
+                    logger.warning(f"   🚀 Triggering early escalation to advanced pipeline...")
+                    logger.warning("=" * 60)
+                    reconciliation_log.append(f"정체 감지: {STAGNATION_THRESHOLD}회 연속 동일 화수 ({len(chapters)}화)")
+                    break  # Exit retry loop and proceed to advanced escalation
                 
                 # 가이드 힌트 준비
                 missing = self._find_missing_episodes(chapters, expected_count)
@@ -417,8 +435,14 @@ class ChapterSplitRunner:
             List of Chapter objects or None if failed
         """
         try:
+            # Fix #5: Enhanced logging for pipeline execution
+            logger.info("=" * 70)
+            logger.info("   🚀 ADVANCED ESCALATION PIPELINE ACTIVATED")
+            logger.info("=" * 70)
+            
             # Stage 1: Generate structural candidates
-            logger.info("   📊 Stage 1: Structural transition point analysis...")
+            logger.info("   📊 [Pipeline Stage 1/5] Structural transition point analysis...")
+            logger.info(f"      → Analyzing file structure for chapter boundaries")
             candidates = self.structural_analyzer.generate_candidates(
                 file_path,
                 encoding=encoding,
@@ -426,31 +450,33 @@ class ChapterSplitRunner:
             )
             
             if not candidates:
-                logger.error("   ❌ No structural candidates found")
+                logger.error("   ❌ [Stage 1 Failed] No structural candidates found")
                 return None
             
-            logger.info(f"   ✅ Generated {len(candidates)} structural candidates")
+            logger.info(f"   ✅ [Stage 1 Complete] Generated {len(candidates)} structural candidates")
             reconciliation_log.append(f"구조 분석: {len(candidates)} 후보 생성")
             
             # Stage 2: AI scoring (optional, can be expensive for large candidate sets)
             # Only score if we have a reasonable number of candidates
             if len(candidates) <= 200:  # Limit to prevent excessive API calls
-                logger.info("   🤖 Stage 2: AI likelihood scoring...")
+                logger.info("   🤖 [Pipeline Stage 2/5] AI likelihood scoring...")
+                logger.info(f"      → Scoring {len(candidates)} candidates with AI (batch_size=10)")
                 candidates = self.ai_scorer.score_candidates(
                     file_path,
                     candidates,
                     encoding=encoding,
                     batch_size=10
                 )
-                logger.info("   ✅ AI scoring complete")
+                logger.info("   ✅ [Stage 2 Complete] AI scoring complete")
                 reconciliation_log.append("AI 스코어링 완료")
             else:
-                logger.warning(f"   ⚠️  Too many candidates ({len(candidates)}), skipping AI scoring")
+                logger.warning(f"   ⚠️  [Stage 2 Skipped] Too many candidates ({len(candidates)}), skipping AI scoring")
                 reconciliation_log.append(f"AI 스코어링 스킵 (후보 수 과다: {len(candidates)})")
             
             # Stage 3: Topic change detection (if we still need more coverage)
+            logger.info("   🔍 [Pipeline Stage 3/5] Topic change detection...")
             if len(candidates) < expected_count * 2:
-                logger.info("   🔍 Stage 3: Topic change detection (fallback)...")
+                logger.info(f"      → Detecting semantic boundaries (need more coverage)")
                 topic_candidates = self.topic_detector.detect_topic_boundaries(
                     file_path,
                     expected_count,
@@ -459,14 +485,17 @@ class ChapterSplitRunner:
                 )
                 
                 if topic_candidates:
-                    logger.info(f"   ✅ Added {len(topic_candidates)} topic-change candidates")
+                    logger.info(f"   ✅ [Stage 3 Complete] Added {len(topic_candidates)} topic-change candidates")
                     candidates.extend(topic_candidates)
                     reconciliation_log.append(f"토픽 변화 감지: {len(topic_candidates)} 후보 추가")
                 else:
-                    logger.info("   ℹ️  No topic-change candidates found")
+                    logger.info("   ℹ️  [Stage 3 Complete] No topic-change candidates found")
+            else:
+                logger.info(f"   ✅ [Stage 3 Skipped] Sufficient candidates ({len(candidates)} >= {expected_count * 2})")
             
             # Stage 4: Global optimization
-            logger.info(f"   🎯 Stage 4: Global optimization (select {expected_count} from {len(candidates)})...")
+            logger.info("   🎯 [Pipeline Stage 4/5] Global optimization...")
+            logger.info(f"      → Selecting optimal {expected_count} boundaries from {len(candidates)} candidates")
             selected = self.global_optimizer.select_optimal_boundaries(
                 candidates,
                 expected_count,
@@ -475,17 +504,19 @@ class ChapterSplitRunner:
             )
             
             if not selected:
-                logger.error("   ❌ Optimization failed to select boundaries")
+                logger.error("   ❌ [Stage 4 Failed] Optimization failed to select boundaries")
                 return None
             
             if len(selected) != expected_count:
-                logger.warning(f"   ⚠️  Optimizer returned {len(selected)}/{expected_count} boundaries")
+                logger.warning(f"   ⚠️  [Stage 4 Partial] Optimizer returned {len(selected)}/{expected_count} boundaries")
+            else:
+                logger.info(f"   ✅ [Stage 4 Complete] Selected exactly {len(selected)} optimal boundaries")
             
-            logger.info(f"   ✅ Selected {len(selected)} optimal boundaries")
             reconciliation_log.append(f"최적화: {len(selected)}개 경계 선택")
             
             # Stage 5: Split using selected boundaries
-            logger.info("   📝 Stage 5: Splitting chapters using selected boundaries...")
+            logger.info("   📝 [Pipeline Stage 5/5] Splitting chapters using selected boundaries...")
+            logger.info(f"      → Creating chapters from {len(selected)} boundaries")
             
             # Extract title lines from selected candidates
             title_lines = [cand['text'] for cand in selected]
@@ -502,12 +533,17 @@ class ChapterSplitRunner:
                 title_candidates=title_lines
             ))
             
-            logger.info(f"   ✅ Advanced pipeline complete: {len(chapters)} chapters extracted")
+            logger.info(f"   ✅ [Stage 5 Complete] Created {len(chapters)} chapters from selected boundaries")
+            logger.info("=" * 70)
+            logger.info(f"   🎉 ADVANCED PIPELINE COMPLETE: {len(chapters)} chapters extracted")
+            logger.info("=" * 70)
             
             return chapters
             
         except Exception as e:
-            logger.error(f"   ❌ Advanced escalation pipeline error: {e}")
+            logger.error("=" * 70)
+            logger.error(f"   ❌ ADVANCED ESCALATION PIPELINE FAILED: {e}")
+            logger.error("=" * 70)
             traceback.print_exc()
             return None
     
@@ -621,6 +657,22 @@ class ChapterSplitRunner:
             if i not in found_nums:
                 missing.append(i)
         return missing
+    
+    def _is_stagnant(self, chapter_count_history: List[int], threshold: int = 3) -> bool:
+        """Check if chapter count has stagnated (no change for N consecutive attempts)
+        
+        Args:
+            chapter_count_history: List of chapter counts from retry attempts
+            threshold: Number of consecutive attempts with same count to consider stagnant
+            
+        Returns:
+            True if stagnated, False otherwise
+        """
+        if len(chapter_count_history) < threshold:
+            return False
+        
+        recent_counts = chapter_count_history[-threshold:]
+        return len(set(recent_counts)) == 1  # All counts are the same
 
     def save_to_db(self, file_id: int, result: Dict[str, Any]) -> None:
         """DB에 저장
