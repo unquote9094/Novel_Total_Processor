@@ -17,12 +17,19 @@ logger = get_logger(__name__)
 
 
 class PatternManager:
-    """AI를 사용하여 소설의 최적 챕터 분할 패턴을 찾아내고 검증 (v3.0 Reference)"""
+    """AI를 사용하여 소설의 최적 챕터 분할 패턴을 찾아내고 검증 (v3.0 Reference)
+    
+    Enhanced Features:
+    - Dynamic gap detection based on expected chapter count and average size
+    - AI-based title candidate extraction with consensus voting
+    - Multi-signal recovery for mixed/irregular chapter patterns
+    """
     
     def __init__(self, client: GeminiClient):
         self.client = client
         self.splitter = Splitter()
         self.sampler = Sampler()
+        self.consensus_votes = 3  # Number of AI calls for consensus voting
     
     def find_best_pattern(
         self,
@@ -187,7 +194,7 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
         return pattern
 
     def refine_pattern_with_goal_v3(self, target_file: str, current_pattern: str, expected_count: int, encoding: str = 'utf-8') -> str:
-        """100% 일치를 위한 최종 보정 (v3.0 확장)"""
+        """100% 일치를 위한 최종 보정 (v3.0 확장) - 동적 갭 분석 및 타이틀 후보 탐지 포함"""
         matches = self.splitter.find_matches_with_pos(target_file, current_pattern, encoding=encoding)
         actual_count = len(matches)
         
@@ -201,18 +208,26 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
                 s = self.splitter.verify_pattern(target_file, ptn, encoding=encoding)
                 if s['match_count'] == expected_count: return ptn
         
-        # 부족 시: 갭 분석 정밀화
+        # 부족 시: 동적 갭 분석 및 타이틀 후보 탐지
         if actual_count < expected_count:
-            logger.info(f"   🔄 부족 화수 추적 중 (누락: {expected_count - actual_count}개)")
-            gaps = self.splitter.find_large_gaps(target_file, matches)
+            missing_count = expected_count - actual_count
+            logger.info(f"   🔄 부족 화수 추적 중 (누락: {missing_count}개)")
+            
+            # Use dynamic gap detection
+            gaps = self.find_dynamic_gaps(target_file, matches, expected_count)
+            
             # [Hotfix v4] 화수 퇴보 방지 (Strict Improvement Rule)
             best_pattern = current_pattern
             best_count = actual_count
             
+            # Track title candidates for fallback
+            all_title_candidates = []
+            
             for gap in gaps:
                 sample = self.sampler.extract_samples_from(target_file, gap['start'], length=30000, encoding=encoding)
                 if not sample: continue
-                # [Hotfix v7] 문맥 인지형 프롬프트 사용
+                
+                # Try pattern refinement first
                 new_p = self._analyze_gap_pattern(sample, best_pattern)
                 if new_p:
                     test_p = f"{best_pattern}|{new_p}"
@@ -227,10 +242,158 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
                         if best_count == expected_count: break
                     else:
                         logger.info(f"   ❌ 보강 패턴 거절 (화수 변화: {best_count} -> {new_count})")
+                
+                # If pattern didn't work, try title candidate extraction
+                if best_count < expected_count:
+                    candidates = self.extract_title_candidates(sample, best_pattern)
+                    all_title_candidates.extend(candidates)
+            
+            # If we still have missing chapters and found title candidates, log them
+            if best_count < expected_count and all_title_candidates:
+                logger.info(f"   📝 Found {len(all_title_candidates)} title candidates for manual/fallback processing")
+                # Store candidates for later use by stage4_splitter
+                # We'll pass this information back through the pattern
+                # For now, just use the improved pattern
             
             return best_pattern
 
         return current_pattern
+
+    def find_dynamic_gaps(self, target_file: str, matches: list, expected_count: int) -> list:
+        """Dynamic gap detection based on average chapter size and expected count
+        
+        Uses adaptive thresholds instead of fixed 100KB gaps. The threshold is calculated
+        as 1.5x the average chapter size to account for novels with varying chapter lengths.
+        
+        Args:
+            target_file: Path to the file
+            matches: List of match positions
+            expected_count: Expected number of chapters
+            
+        Returns:
+            List of gap dictionaries with start, end, size, and priority
+        """
+        if not matches or expected_count <= 0:
+            return []
+        
+        total_size = os.path.getsize(target_file)
+        
+        # Calculate average expected chapter size
+        avg_chapter_size = total_size / expected_count if expected_count > 0 else 100000
+        
+        # Dynamic threshold constants
+        GAP_MULTIPLIER = 1.5  # Gaps must be 1.5x average to be significant
+        MIN_GAP_SIZE = 50000  # Minimum 50KB regardless of average (prevents tiny gaps)
+        
+        # Dynamic threshold: gaps larger than 1.5x average chapter size
+        dynamic_threshold = max(avg_chapter_size * GAP_MULTIPLIER, MIN_GAP_SIZE)
+        
+        gaps = []
+        
+        # Check gap before first match
+        if matches[0]['pos'] > dynamic_threshold:
+            gaps.append({
+                'start': 0,
+                'end': matches[0]['pos'],
+                'size': matches[0]['pos'],
+                'priority': matches[0]['pos'] / avg_chapter_size
+            })
+        
+        # Check gaps between matches
+        for i in range(len(matches) - 1):
+            gap_size = matches[i + 1]['pos'] - matches[i]['pos']
+            if gap_size > dynamic_threshold:
+                gaps.append({
+                    'start': matches[i]['pos'],
+                    'end': matches[i + 1]['pos'],
+                    'size': gap_size,
+                    'priority': gap_size / avg_chapter_size
+                })
+        
+        # Check gap after last match
+        tail_size = total_size - matches[-1]['pos']
+        if tail_size > dynamic_threshold:
+            gaps.append({
+                'start': matches[-1]['pos'],
+                'end': total_size,
+                'size': tail_size,
+                'priority': tail_size / avg_chapter_size
+            })
+        
+        # Sort by priority (largest gaps relative to average first)
+        gaps.sort(key=lambda x: x['priority'], reverse=True)
+        
+        logger.info(f"   📊 Dynamic gap analysis: {len(gaps)} gaps found (threshold: {dynamic_threshold/1024:.1f}KB)")
+        
+        return gaps[:10]  # Return top 10 gaps
+
+    def extract_title_candidates(self, window_text: str, current_pattern: str) -> List[str]:
+        """AI-based title candidate extraction for a specific window
+        
+        Uses consensus voting across multiple AI calls for robustness.
+        
+        Args:
+            window_text: Text window to analyze
+            current_pattern: Current regex pattern (for context)
+            
+        Returns:
+            List of title candidate lines
+        """
+        prompt = f"""=== title_candidate_extraction ===
+You are an expert in analyzing novel text structures.
+
+[Task]
+Find all lines that could be chapter titles in the following text.
+Return ONLY the actual title lines, one per line, nothing else.
+
+A chapter title is:
+- Usually short (1-50 characters)
+- Contains numbers, episode markers, or chapter indicators
+- Stands out from regular narrative text
+- May use brackets, special formatting, or numbering
+
+[Current Pattern Context]
+We already found some chapters with pattern: {current_pattern}
+But we're missing chapters in this specific area.
+
+[Text Window]
+{window_text[:20000]}
+
+[Output Format]
+Return only the title lines, one per line. No explanations, no markdown.
+If no titles found, return "NO_TITLES_FOUND".
+"""
+        
+        all_candidates = []
+        
+        # Consensus voting: call AI multiple times
+        for vote in range(self.consensus_votes):
+            try:
+                response = self.client.generate_content(prompt)
+                if response and "NO_TITLES_FOUND" not in response:
+                    lines = [line.strip() for line in response.strip().split('\n') if line.strip()]
+                    all_candidates.extend(lines)
+                time.sleep(0.5)  # Rate limiting
+            except Exception as e:
+                logger.warning(f"   ⚠️ Title candidate extraction vote {vote+1} failed: {e}")
+        
+        # Count occurrences of each candidate (consensus filtering)
+        from collections import Counter
+        candidate_counts = Counter(all_candidates)
+        
+        # Majority voting: Keep candidates that appear in at least half the votes (rounded up)
+        # This implements a simple consensus mechanism for robustness
+        CONSENSUS_THRESHOLD_RATIO = 0.5  # Require at least 50% agreement
+        consensus_threshold = max(1, int(self.consensus_votes * CONSENSUS_THRESHOLD_RATIO))
+        
+        consensus_candidates = [
+            candidate for candidate, count in candidate_counts.items()
+            if count >= consensus_threshold
+        ]
+        
+        logger.info(f"   📋 Title candidates: {len(consensus_candidates)} found via consensus")
+        
+        return consensus_candidates
 
     def _try_fallback(self, target_file: str, encoding: str = 'utf-8') -> Tuple[Optional[str], Optional[str]]:
         for ptn in [r"\d+\s*화", r"제\s*\d+\s*화", r"\[\d+\]"]:

@@ -14,19 +14,43 @@ logger = get_logger(__name__)
 
 
 class Splitter:
-    """Regex 패턴을 사용하여 대용량 텍스트 파일을 챕터 단위로 분할 (v3.0 Reference)"""
+    """Regex 패턴을 사용하여 대용량 텍스트 파일을 챕터 단위로 분할 (v3.0 Reference)
+    
+    Enhanced Features:
+    - Support for explicit title candidate lines (fallback when regex misses chapters)
+    - Multi-line title support (merge title candidate + true title)
+    - Aggressive title trimming (20-char threshold for body vs subtitle)
+    """
+    
+    # Multi-line title detection constants
+    # BRACKET_PATTERN_LENGTH: Check first 50 chars for bracket patterns to detect multi-line titles
+    # This is chosen to cover typical Korean novel title formats like "[웹소설 - 34화]"
+    BRACKET_PATTERN_LENGTH = 50
+    
+    # MAX_TITLE_LENGTH: Limit extracted title to 100 chars to avoid including body text
+    # Korean chapter titles rarely exceed this length, and it helps maintain clean separation
+    MAX_TITLE_LENGTH = 100
     
     def __init__(self):
-        pass
+        pass  # No instance state needed; all parameters passed to split() method
     
     def split(
         self,
         file_path: str,
         chapter_pattern: str,
         subtitle_pattern: Optional[str] = None,
-        encoding: str = 'utf-8'
+        encoding: str = 'utf-8',
+        title_candidates: Optional[List[str]] = None
     ) -> Generator[Chapter, None, None]:
-        """파일을 스트리밍 방식으로 읽어 챕터를 분할 (v3.0 기반 고성능 버전)"""
+        """파일을 스트리밍 방식으로 읽어 챕터를 분할 (v3.0 기반 고성능 버전)
+        
+        Args:
+            file_path: Path to file
+            chapter_pattern: Regex pattern for chapter titles
+            subtitle_pattern: Optional regex pattern for subtitles
+            encoding: File encoding
+            title_candidates: Optional list of explicit title lines for fallback detection
+        """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
         
@@ -42,17 +66,41 @@ class Splitter:
         chapter_count = 0
         first_match_found = False
         
+        # Multi-line title support: track potential title candidates
+        pending_title_candidate = None
+        
         with open(file_path, 'r', encoding=encoding, errors='replace') as f:
             for line_idx, line in enumerate(f):
                 line_stripped = line.strip()
                 if not line_stripped:
                     if first_match_found: buffer.append(line)
+                    pending_title_candidate = None  # Reset on blank line
                     continue
                 
-                # 정규식 매칭 (제목 여부 확인)
+                # Check if this line is in explicit title candidates
+                is_explicit_title = (title_candidates and 
+                                   any(line_stripped == candidate or 
+                                       candidate in line_stripped 
+                                       for candidate in title_candidates))
+                
+                # 정규식 매칭 (제목 여부 확인) or explicit title
                 match = pattern.search(line_stripped)
                 
-                if match:
+                if match or is_explicit_title:
+                    # Check for multi-line title pattern
+                    # If we have a pending candidate and this is also a match,
+                    # merge them into one title
+                    if pending_title_candidate and first_match_found:
+                        # This is a true title following a candidate
+                        # Merge them: "candidate + true_title"
+                        merged_title = f"{pending_title_candidate} | {line_stripped[:self.MAX_TITLE_LENGTH].strip()}"
+                        pending_title_candidate = None
+                        
+                        # Use merged title as current title
+                        current_title = merged_title
+                        buffer = []
+                        continue
+                    
                     # 1. 이전 챕터 반환 (Yield)
                     if first_match_found:
                         body_text = "".join(buffer).strip()
@@ -79,8 +127,13 @@ class Splitter:
                     first_match_found = True
                     
                     # [Smart Trimming] 제목 뒤에 본문이 딸려오는 현상 차단
-                    core_match_text = line_stripped[:match.end()].strip()
-                    tail_text = line_stripped[match.end():].strip()
+                    if match:
+                        core_match_text = line_stripped[:match.end()].strip()
+                        tail_text = line_stripped[match.end():].strip()
+                    else:
+                        # Explicit title candidate
+                        core_match_text = line_stripped
+                        tail_text = ""
                     
                     # 제목 뒷부분이 20자를 넘으면 100% 본문으로 간주 (v3.0 개선안)
                     if len(tail_text) > 20:
@@ -88,7 +141,12 @@ class Splitter:
                         buffer = [tail_text + "\n"]
                     else:
                         # 20자 이내인 경우에만 부제목으로 인정
-                        current_title = line_stripped[:100].strip()
+                        # Check if this might be a title candidate (for multi-line support)
+                        # Bracket patterns within first N chars indicate potential multi-line title
+                        if re.search(r'\[.*?\]', line_stripped[:self.BRACKET_PATTERN_LENGTH]):
+                            pending_title_candidate = line_stripped[:self.MAX_TITLE_LENGTH].strip()
+                        
+                        current_title = line_stripped[:self.MAX_TITLE_LENGTH].strip()
                         buffer = []
                     
                     current_subtitle = ""
@@ -96,6 +154,7 @@ class Splitter:
                 
                 elif first_match_found:
                     buffer.append(line)
+                    pending_title_candidate = None  # Reset if we see body text
             
             # 마지막 챕터 처리
             if first_match_found:
