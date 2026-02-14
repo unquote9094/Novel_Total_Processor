@@ -69,10 +69,8 @@ class Splitter:
         
         # Debug logging for title_candidates mode
         if using_explicit_titles:
-            logger.info(f"   🔍 Splitter: Using {len(title_candidates)} explicit title_candidates")
-            logger.info(f"      → Will skip aggressive body text filtering")
-            logger.info(f"      → Sample candidates: {title_candidates[:3] if len(title_candidates) > 0 else []}")
-            logger.info(f"      → Pattern: '{pattern_str}' (permissive: {pattern_str in [r'.+', r'.', r'.*']})")
+            is_permissive = pattern_str in [r'.+', r'.', r'.*']
+            logger.info(f"   🔍 Splitter mode: {len(title_candidates)} title_candidates, pattern='{pattern_str}' ({'permissive' if is_permissive else 'specific'})")
         
         buffer = []
         current_title = ""
@@ -96,10 +94,6 @@ class Splitter:
                                    any(line_stripped == candidate or 
                                        candidate in line_stripped 
                                        for candidate in title_candidates))
-                
-                # Debug logging for explicit title detection
-                if using_explicit_titles and is_explicit_title:
-                    logger.info(f"   ✓ Matched explicit title at line {line_idx}: '{line_stripped[:50]}'")
                 
                 # 정규식 매칭 (제목 여부 확인) or explicit title
                 match = pattern.search(line_stripped)
@@ -148,12 +142,8 @@ class Splitter:
                         is_permissive_pattern = (pattern_str in [r'.+', r'.', r'.*'])
                         if not (using_explicit_titles and is_permissive_pattern) and len(body_text) < 100 and not re.search(r'\d+', current_title):
                             buffer = [f"\n{current_title}\n", body_text + "\n"]
-                            if using_explicit_titles:
-                                logger.info(f"   ⚠️  Merging short chapter (< 100 chars, no number): '{current_title[:30]}'")
                         else:
                             if body_text:
-                                if using_explicit_titles:
-                                    logger.info(f"   ✅ Yielding chapter {chapter_count+1}: '{current_title[:30]}' ({len(body_text)} chars)")
                                 yield Chapter(
                                     cid=chapter_count,
                                     title=current_title,
@@ -162,8 +152,6 @@ class Splitter:
                                     length=len(body_text)
                                 )
                                 chapter_count += 1
-                            elif using_explicit_titles:
-                                logger.info(f"   ⚠️  Skipping empty chapter: '{current_title[:30]}'")
 
                     # 2. 새 챕터 시작 - Aggressive Title Trimming (Ref-v3.0 고도화)
                     first_match_found = True

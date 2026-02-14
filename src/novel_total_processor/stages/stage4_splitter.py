@@ -516,39 +516,21 @@ class ChapterSplitRunner:
             
             # Stage 5: Split using selected boundaries
             logger.info("   📝 [Pipeline Stage 5/5] Splitting chapters using selected boundaries...")
-            logger.info(f"      → Creating chapters from {len(selected)} boundaries")
+            logger.info(f"      → Boundaries: {len(selected)} (format: line_num/text/byte_pos)")
+            logger.info(f"      → Sample: line={selected[0]['line_num']}, text='{selected[0]['text'][:30]}...'")
             
-            # [Debug Logging] Show boundary format details
-            logger.info(f"      → Boundary format: dict with keys=['line_num', 'text', 'byte_pos', 'combined_score']")
-            logger.info(f"      → Boundary type: line indices (0-indexed) with associated text")
-            logger.info(f"      → Sample boundaries (first 3):")
-            for i, sel in enumerate(selected[:3]):
-                logger.info(f"         {i+1}. line_num={sel['line_num']}, byte_pos={sel.get('byte_pos', 'N/A')}, text='{sel['text'][:50]}'")
-            
-            # Extract title lines from selected candidates
-            title_lines = [cand['text'] for cand in selected]
-            
-            # [Debug Logging] Show what we're passing to splitter
-            logger.info(f"      → Extracted {len(title_lines)} title_candidates for splitter")
-            logger.info(f"      → Title candidates are exact text strings from boundaries")
-            
-            # Validate title_lines before splitting
-            valid_title_lines = [t for t in title_lines if t and t.strip()]
-            filtered_count = len(title_lines) - len(valid_title_lines)
-            if filtered_count > 0:
-                logger.warning(f"      ⚠️  Filtered out {filtered_count} empty/whitespace boundaries")
-                title_lines = valid_title_lines
+            # Extract and validate title lines from selected candidates
+            title_lines = [cand['text'] for cand in selected if cand.get('text', '').strip()]
             
             if not title_lines:
-                logger.error("      ❌ No valid title lines after filtering")
+                logger.error("      ❌ No valid title lines from boundaries")
                 return None
             
-            # Use splitter with these explicit title candidates
-            # We use a very permissive pattern since we already have exact titles
-            permissive_pattern = r'.+'  # Match any non-empty line
+            if len(title_lines) < len(selected):
+                logger.warning(f"      ⚠️  Filtered {len(selected) - len(title_lines)} empty boundaries")
             
-            logger.info(f"      → Using permissive pattern: '{permissive_pattern}'")
-            logger.info(f"      → Splitter will match boundaries by exact text comparison")
+            # Use splitter with permissive pattern and explicit title candidates
+            permissive_pattern = r'.+'
             
             chapters = list(self.splitter.split(
                 file_path,
@@ -558,16 +540,13 @@ class ChapterSplitRunner:
                 title_candidates=title_lines
             ))
             
-            # [Enhanced Logging] Report creation results
+            # Report creation results
             if len(chapters) == 0:
                 logger.error(f"   ❌ [Stage 5 Failed] Created 0 chapters from {len(selected)} boundaries!")
-                logger.error(f"      → This indicates a boundary format mismatch or splitter issue")
-                logger.error(f"      → Expected {len(selected)} chapters, got 0")
-                logger.error(f"      → Check that title_candidates match file content exactly")
+                logger.error(f"      → Boundary/splitter mismatch - check title_candidates format")
                 return None
             elif len(chapters) < len(selected):
                 logger.warning(f"   ⚠️  [Stage 5 Partial] Created {len(chapters)}/{len(selected)} chapters")
-                logger.warning(f"      → Some boundaries did not produce chapters")
             else:
                 logger.info(f"   ✅ [Stage 5 Complete] Created {len(chapters)} chapters from {len(selected)} boundaries")
             logger.info("=" * 70)
