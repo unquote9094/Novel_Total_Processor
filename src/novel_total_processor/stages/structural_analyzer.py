@@ -162,7 +162,7 @@ class StructuralAnalyzer:
         }
         
         # Check for dialogue (quoted text or short exclamations)
-        features['is_dialogue'] = bool(re.match(r'^["\'"「『"\''].+["\'"」』"\'']$', line)) or \
+        features['is_dialogue'] = bool(re.match(r'^["\'「『"].+["\'」』"]$', line)) or \
                                    bool(re.match(r'^.{1,40}[?!？！]$', line))
         
         # Check for sentence endings (but not chapter indicators)
