@@ -424,7 +424,7 @@ class ChapterSplitRunner:
                             line_num = self._pos_to_line_num(file_path, match['pos'], encoding)
                             anchor_boundaries.append({
                                 'line_num': line_num,
-                                'text': match['title'],
+                                'text': match['line'],
                                 'confidence': 1.0,  # Pattern matches have high confidence
                                 'byte_pos': match['pos']
                             })
