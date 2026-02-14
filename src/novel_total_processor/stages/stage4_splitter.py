@@ -39,6 +39,7 @@ class ChapterSplitRunner:
     MAX_RETRIES = 5  # Increased from 3 to support more recovery attempts
     TITLE_CANDIDATE_RETRY_THRESHOLD = 2  # Start using title candidates after this many retries
     MAX_GAPS_TO_ANALYZE = 3  # Limit gap analysis to top N gaps for efficiency
+    ESTIMATED_AVG_LINE_BYTES = 1000  # Estimated average bytes per line for position calculations
     
     def __init__(self, db: Database):
         """
@@ -678,13 +679,13 @@ class ChapterSplitRunner:
             if chapters:
                 empty_count = sum(1 for ch in chapters if ch.length < 100)
                 empty_ratio = empty_count / len(chapters)
-                if empty_ratio > 0.1:  # 10% 초과 빈 챕터면 실패
+                if empty_ratio > 0.1:  # Fail if >10% empty chapters
                     logger.error(f"   ❌ Quality check FAILED: {empty_count}/{len(chapters)} chapters <100 chars ({empty_ratio*100:.0f}%)")
                     logger.error(f"   🚫 Advanced pipeline rejected due to too many empty chapters")
                     return None
                 
                 avg_length = sum(ch.length for ch in chapters) / len(chapters)
-                if avg_length < 500:
+                if avg_length < 500:  # Fail if average chapter is too short
                     logger.error(f"   ❌ Quality check FAILED: avg chapter length = {avg_length:.0f} chars")
                     logger.error(f"   🚫 Advanced pipeline rejected due to low average chapter length")
                     return None
@@ -731,7 +732,8 @@ class ChapterSplitRunner:
             
         except Exception as e:
             logger.warning(f"Could not convert pos to line_num: {e}")
-            return pos // 1000  # Rough estimate
+            # Fallback: estimate line number based on average line length
+            return pos // self.ESTIMATED_AVG_LINE_BYTES
     
     def _analyze_chapter_types(self, chapters: List[Chapter]) -> Dict[str, Any]:
         """챕터 제목 분석하여 본편/외전/에필로그 분류

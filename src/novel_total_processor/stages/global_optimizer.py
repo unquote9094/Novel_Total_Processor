@@ -17,6 +17,8 @@ class GlobalOptimizer:
     # Optimization constants
     MIN_CHAPTER_LENGTH = 1000  # Minimum characters between chapters
     MIN_CHAPTER_RATIO = 0.3    # Minimum chapter size as ratio of average
+    ESTIMATED_AVG_LINE_BYTES = 1000  # Rough estimate for byte position calculations
+    ABSOLUTE_MIN_SPACING = 500  # Absolute minimum byte spacing (prevents clustered boundaries)
     
     def __init__(self):
         pass
@@ -70,7 +72,8 @@ class GlobalOptimizer:
             logger.warning(f"Could not calculate positions: {e}")
             file_size = 0
             for cand in scored_candidates:
-                cand['byte_pos'] = cand['line_num'] * 1000  # Rough estimate
+                # Fallback: estimate position based on line number
+                cand['byte_pos'] = cand['line_num'] * self.ESTIMATED_AVG_LINE_BYTES
         
         # Calculate typical chapter size
         avg_chapter_size = file_size / expected_count if expected_count > 0 else 50000
@@ -93,7 +96,8 @@ class GlobalOptimizer:
                         anchor['byte_pos'] = sum(len(line.encode(encoding, errors='replace')) 
                                                for line in lines[:line_num])
                     except:
-                        anchor['byte_pos'] = line_num * 1000  # Rough estimate
+                        # Fallback: estimate position based on line number
+                        anchor['byte_pos'] = line_num * self.ESTIMATED_AVG_LINE_BYTES
             
             selected = anchor_boundaries.copy()
             remaining_needed = expected_count - len(selected)
@@ -154,10 +158,9 @@ class GlobalOptimizer:
             selected = new_selected
         
         # If still not enough, enforce absolute minimum spacing of 500 bytes
-        ABSOLUTE_MIN_SPACING = 500
         if len(selected) < expected_count:
             logger.warning(f"   ⚠️  Still only {len(selected)}/{expected_count} with relaxed spacing")
-            logger.warning(f"   🔄 Using absolute minimum spacing ({ABSOLUTE_MIN_SPACING} bytes)...")
+            logger.warning(f"   🔄 Using absolute minimum spacing ({self.ABSOLUTE_MIN_SPACING} bytes)...")
             
             # Keep anchors if present
             if anchor_boundaries:
@@ -172,7 +175,7 @@ class GlobalOptimizer:
                     break
                 
                 pos = candidate['byte_pos']
-                if pos not in seen_positions and self._is_valid_selection(candidate, new_selected, ABSOLUTE_MIN_SPACING):
+                if pos not in seen_positions and self._is_valid_selection(candidate, new_selected, self.ABSOLUTE_MIN_SPACING):
                     new_selected.append(candidate)
                     seen_positions.add(pos)
             

@@ -245,10 +245,12 @@ class StructuralAnalyzer:
             score += 0.15
         
         # Apply penalties for dialogue and sentences
+        # Note: Penalties can drive scores negative before clamping to [0, 1]
+        # This ensures dialogue/sentences are strongly discouraged as candidates
         if features.get('is_dialogue'):
             score -= 0.4  # Strong penalty for dialogue
         if features.get('is_sentence'):
             score -= 0.3  # Penalty for regular sentences
         
-        # Normalize to 0-1 range
+        # Normalize to 0-1 range (clamp both lower and upper bounds)
         return min(1.0, max(0.0, score))
