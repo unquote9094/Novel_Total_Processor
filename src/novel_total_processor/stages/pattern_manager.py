@@ -356,6 +356,45 @@ Examples of real chapter title patterns used in Korean novels:
                 # We'll pass this information back through the pattern
                 # For now, just use the improved pattern
             
+            # Level 3: Direct AI title search if still below 95% accuracy
+            if best_count < expected_count * 0.95:
+                logger.info(f"   🚀 [Level 3 Trigger] Current accuracy: {best_count}/{expected_count} ({best_count/expected_count*100:.1f}%)")
+                logger.info(f"   -> Activating Level 3: Direct AI title search...")
+                
+                # Get existing matches with text for context
+                existing_matches = self._find_matches_with_text(target_file, best_pattern, encoding)
+                
+                # Call Level 3 direct search
+                found_titles = self.direct_ai_title_search(
+                    target_file, best_pattern, expected_count, existing_matches, encoding
+                )
+                
+                if found_titles:
+                    logger.info(f"   ✨ [Level 3] Found {len(found_titles)} additional titles via AI search")
+                    
+                    # Build pattern from these examples
+                    reverse_pattern = self._build_pattern_from_examples(found_titles)
+                    
+                    if reverse_pattern:
+                        # Combine with existing pattern
+                        combined = f"{best_pattern}|{reverse_pattern}"
+                        
+                        # Test the combined pattern
+                        test_s = self.splitter.verify_pattern(target_file, combined, encoding=encoding)
+                        new_count = test_s.get('match_count', 0)
+                        
+                        # Accept if it improves and doesn't over-match (within 5% tolerance)
+                        if new_count > best_count and new_count <= expected_count * 1.05:
+                            logger.info(f"   ✅ [Level 3 Success] Pattern improved: {best_count} -> {new_count}")
+                            best_pattern = combined
+                            best_count = new_count
+                        else:
+                            logger.info(f"   ❌ [Level 3] Reverse pattern didn't improve ({new_count} matches)")
+                    else:
+                        logger.warning(f"   ⚠️  [Level 3] Failed to build reverse pattern from examples")
+                else:
+                    logger.info(f"   ℹ️  [Level 3] No additional titles found by AI")
+            
             return (best_pattern, rejection_count)
 
         return (current_pattern, 0)
@@ -663,20 +702,44 @@ If no titles found, return "NO_TITLES_FOUND".
         return cleaned
     
     def _relax_number_requirement(self, pattern: str) -> str:
-        """Relax number requirements in pattern (\\d+ -> \\d*)"""
-        # Replace \\d+ with \\d* to make numbers optional
-        # But keep at least one \\d somewhere if pattern has multiple number groups
+        """Relax number requirements in pattern with multiple strategies
         
-        # Simple strategy: replace all \\d+ with \\d*
-        relaxed = pattern.replace(r'\d+', r'\d*')
+        Strategy 1: \\d+ -> \\d* (make numbers optional)
+        Strategy 2: \\(\\d+\\) or \\(\\d*\\) -> (?:\\(\\d*\\))? (make entire parenthesized number optional)
+        Strategy 3: Remove number requirements entirely, keeping only structure
         
-        # If pattern becomes too loose (no digits required at all), try a hybrid approach
-        # Keep the first \\d+ and relax the rest
-        if r'\d' not in relaxed:
-            # Pattern has no digit requirements, return original
+        Returns the best variation based on testing
+        """
+        variations = []
+        
+        # Strategy 1: \\d+ -> \\d* (original approach)
+        v1 = pattern.replace(r'\d+', r'\d*')
+        if v1 != pattern:
+            variations.append(('strategy1_digit_optional', v1))
+        
+        # Strategy 2: Make parenthesized numbers completely optional
+        # Match patterns like \\(\\d+\\) or \\(\\d*\\) and make them optional
+        v2 = re.sub(r'\\?\(\\d[+*]\\?\)', r'(?:\\(\\d*\\))?', pattern)
+        if v2 != pattern:
+            variations.append(('strategy2_parens_optional', v2))
+        
+        # Strategy 3: Combine both strategies
+        v3 = re.sub(r'\\?\(\\d[+*]\\?\)', r'(?:\\(\\d*\\))?', v1)
+        if v3 != pattern and v3 != v1 and v3 != v2:
+            variations.append(('strategy3_combined', v3))
+        
+        # If no variations were created, return original
+        if not variations:
             return pattern
         
-        return relaxed
+        # Log the variations for debugging
+        logger.info(f"   🔄 Generated {len(variations)} relaxation variations:")
+        for name, var_pattern in variations:
+            logger.info(f"      - {name}: {var_pattern[:80]}{'...' if len(var_pattern) > 80 else ''}")
+        
+        # Return the most aggressive variation (strategy 3 if available, else strategy 2, else strategy 1)
+        # This gives the best chance to match titles without numbers or parentheses
+        return variations[-1][1] if variations else pattern
     
     def _add_end_marker_exclusion(self, pattern: str, end_keywords: List[str]) -> str:
         """Add negative lookahead to exclude end markers"""
@@ -704,10 +767,11 @@ If no titles found, return "NO_TITLES_FOUND".
         existing_matches: List[Dict[str, Any]],
         encoding: str = 'utf-8'
     ) -> List[str]:
-        """Level 3: Direct AI title search in gap regions
+        """Level 3: Direct AI title search using 30 samples
         
         When Level 1 (regex) and Level 2 (auto-fix) don't achieve 95% accuracy,
-        ask AI to directly find chapter titles in the missing regions.
+        ask AI to directly find chapter titles by examining 30 evenly distributed samples
+        from the entire file.
         
         Args:
             target_file: Path to target file
@@ -719,31 +783,43 @@ If no titles found, return "NO_TITLES_FOUND".
         Returns:
             List of title lines found by AI
         """
-        logger.info("   🔍 [Level 3] Direct AI title search in gap regions...")
+        logger.info("   🔍 [Level 3] Direct AI title search using 30 samples...")
         
-        # Find gap regions
-        gaps = self.find_dynamic_gaps(target_file, existing_matches, expected_count)
+        # Get examples of existing titles for context
+        example_titles = [m['text'] for m in existing_matches[:10]]
         
-        if not gaps:
-            logger.info("   ℹ️  No significant gaps found")
+        # Extract 30 samples from the entire file (not just gaps)
+        logger.info(f"   📊 Extracting 30 samples from file for comprehensive search...")
+        samples_text = self.sampler.extract_samples(target_file, encoding=encoding)
+        
+        if not samples_text:
+            logger.warning("   ⚠️  Failed to extract samples")
             return []
-        
-        # Get a few examples of existing titles
-        example_titles = [m['text'] for m in existing_matches[:5]]
         
         all_found_titles = []
         
-        # Search in each gap
-        for i, gap in enumerate(gaps[:3]):  # Limit to top 3 gaps
-            logger.info(f"   🔎 Searching gap {i+1}/{min(len(gaps), 3)} (size: {gap['size']/1024:.1f}KB)")
-            
-            # Extract text from gap region
-            gap_text = self.sampler.extract_samples_from(
-                target_file, gap['start'], length=min(50000, gap['size']), encoding=encoding
-            )
-            
-            if not gap_text:
-                continue
+        # Split samples into manageable chunks for AI processing
+        # Each chunk should be around 20000 chars to fit in AI context
+        MAX_CHUNK_SIZE = 20000
+        chunks = []
+        current_chunk = ""
+        
+        for line in samples_text.split('\n'):
+            if len(current_chunk) + len(line) + 1 > MAX_CHUNK_SIZE:
+                if current_chunk:
+                    chunks.append(current_chunk)
+                current_chunk = line + '\n'
+            else:
+                current_chunk += line + '\n'
+        
+        if current_chunk:
+            chunks.append(current_chunk)
+        
+        logger.info(f"   📦 Split samples into {len(chunks)} chunks for AI processing")
+        
+        # Process each chunk
+        for i, chunk_text in enumerate(chunks):
+            logger.info(f"   🔎 Processing chunk {i+1}/{len(chunks)} ({len(chunk_text)} chars)")
             
             # Ask AI to find titles directly
             prompt = f"""=== direct_title_search ===
@@ -754,17 +830,17 @@ Find ALL chapter title lines in the text below.
 Look at the examples and find similar titles in the text.
 
 [Examples of Chapter Titles Already Found]
-{chr(10).join(f'- {title}' for title in example_titles)}
+{chr(10).join(f'- {title}' for title in example_titles) if example_titles else '(No examples yet - find chapter title patterns)'}
 
 [Instructions]
-1. Find lines with the SAME format/structure as the examples
+1. Find lines with the SAME format/structure as the examples (or similar patterns if no examples)
 2. Include titles WITH numbers and WITHOUT numbers (both are valid)
 3. EXCLUDE lines ending with "끝", "완", "END", "fin" (end markers)
 4. EXCLUDE dialogue, body text, and page numbers
 5. Return ONLY the actual title lines found
 
 [Text to Search]
-{gap_text}
+{chunk_text}
 
 [Output]
 List each found title on a separate line.
@@ -778,17 +854,97 @@ If no titles found, return "NO_TITLES_FOUND".
                             if line.strip() and len(line.strip()) < 100]
                     
                     if found:
-                        logger.info(f"   ✨ Found {len(found)} titles in gap {i+1}: {found[:3]}...")
+                        logger.info(f"   ✨ Found {len(found)} titles in chunk {i+1}: {found[:3]}...")
                         all_found_titles.extend(found)
                 
                 time.sleep(0.5)  # Rate limiting
                 
             except Exception as e:
-                logger.warning(f"   ⚠️  Direct search in gap {i+1} failed: {e}")
+                logger.warning(f"   ⚠️  Direct search in chunk {i+1} failed: {e}")
         
-        logger.info(f"   📝 [Level 3] Total titles found: {len(all_found_titles)}")
+        # Remove duplicates while preserving order
+        unique_titles = []
+        seen = set()
+        for title in all_found_titles:
+            normalized = title.strip()
+            if normalized not in seen:
+                seen.add(normalized)
+                unique_titles.append(title)
         
-        return all_found_titles
+        logger.info(f"   📝 [Level 3] Total unique titles found: {len(unique_titles)} (from {len(all_found_titles)} total)")
+        
+        return unique_titles
+    
+    def _build_pattern_from_examples(self, title_examples: List[str]) -> Optional[str]:
+        """Build regex pattern from actual title examples (reverse extraction)
+        
+        Takes a list of actual chapter title lines found by AI and asks AI to
+        generate a regex pattern that matches all of them.
+        
+        Args:
+            title_examples: List of actual title lines found
+            
+        Returns:
+            Regex pattern string or None if failed
+        """
+        if not title_examples:
+            logger.warning("   ⚠️  No title examples provided for reverse pattern extraction")
+            return None
+        
+        logger.info(f"   🔄 [Reverse Extraction] Building pattern from {len(title_examples)} examples...")
+        
+        # Limit to 30 examples to keep prompt size reasonable
+        sample_titles = title_examples[:30]
+        
+        prompt = f"""=== reverse_pattern_extraction ===
+You are a regex expert specialized in Korean novel chapter title patterns.
+
+Below are ACTUAL chapter title lines found in a Korean novel.
+Create a Python regex pattern that matches ALL of these titles.
+
+[Title Examples]
+{chr(10).join(f'- {t}' for t in sample_titles)}
+
+[Rules]
+- The regex must match ALL examples above
+- EXCLUDE lines ending with "끝", "완", "END", "fin" (end markers)
+- Use negative lookahead if needed: (?!.*끝\\s*$)
+- Keep the pattern as precise as possible to avoid false matches
+- The pattern should generalize to similar titles (not just literal matches)
+- Use character classes, quantifiers, and groups appropriately
+
+[Output Format]
+Output ONLY the raw regex pattern. No markdown, no explanation, no code blocks.
+Just the regex string itself.
+
+Example output format: ^\\s*<\\s*.+?\\s*>\\s*$
+"""
+        
+        try:
+            response = self.client.generate_content(prompt)
+            if response:
+                # Clean up the response (remove markdown, extra whitespace)
+                pattern = response.strip()
+                
+                # Remove markdown code blocks if present
+                if pattern.startswith('```'):
+                    lines = pattern.split('\n')
+                    pattern = '\n'.join(l for l in lines if not l.startswith('```'))
+                    pattern = pattern.strip()
+                
+                # Validate it's a valid regex
+                try:
+                    re.compile(pattern)
+                    logger.info(f"   ✅ [Reverse Extraction] Generated pattern: {pattern[:80]}{'...' if len(pattern) > 80 else ''}")
+                    return pattern
+                except re.error as e:
+                    logger.error(f"   ❌ [Reverse Extraction] Invalid regex generated: {e}")
+                    return None
+            
+        except Exception as e:
+            logger.error(f"   ❌ [Reverse Extraction] Failed to generate pattern: {e}")
+        
+        return None
     
     def _try_fallback(self, target_file: str, encoding: str = 'utf-8') -> Tuple[Optional[str], Optional[str]]:
         for ptn in [r"\d+\s*화", r"제\s*\d+\s*화", r"\[\d+\]"]:
