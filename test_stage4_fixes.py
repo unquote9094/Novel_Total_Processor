@@ -191,10 +191,11 @@ def test_stagnation_detection():
     
     # Test 4: Stagnation detected (+/-2 fluctuation)
     logger.info("  Testing stagnation with +/-2 fluctuation...")
-    chapter_count_history = [85, 85, 87, 85]
+    # Only last 3 values are considered: [85, 87, 85] with max-min = 2
+    chapter_count_history = [80, 85, 87, 85]
     is_stagnant = runner._is_stagnant(chapter_count_history, threshold=3)
-    assert is_stagnant, "Expected stagnation for +/-2 fluctuation"
-    logger.info("    ✓ Stagnation detected for +/-2 fluctuation")
+    assert is_stagnant, "Expected stagnation for +/-2 fluctuation in last 3 attempts"
+    logger.info("    ✓ Stagnation detected for +/-2 fluctuation (last 3: [85, 87, 85])")
     
     # Test 5: No stagnation (change > 2)
     logger.info("  Testing non-stagnant case (change > 2)...")
