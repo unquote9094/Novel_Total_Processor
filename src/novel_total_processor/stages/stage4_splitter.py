@@ -174,17 +174,24 @@ class ChapterSplitRunner:
             
             reconciliation_log = []
             
-            # 부족하거나(Under) 넘칠 때(Over) 모두 정밀 분석 트리거 (최대 3회 시도)
+            # Enhanced recovery loop with multi-signal detection
+            # 부족하거나(Under) 넘칠 때(Over) 모두 정밀 분석 트리거 (최대 5회 시도, 증가됨)
             retry_count = 0
-            while expected_count > 0 and len(chapters) != expected_count and retry_count < 3:
+            max_retries = 5  # Increased from 3 to support more recovery attempts
+            title_candidates_used = False
+            
+            while expected_count > 0 and len(chapters) != expected_count and retry_count < max_retries:
                 retry_count += 1
-                logger.error(f"   ❌ [Mismatch] 화수 불일치 감지 ({len(chapters)}/{expected_count}). 재시도({retry_count}/3)를 시작합니다.")
+                logger.error(f"   ❌ [Mismatch] 화수 불일치 감지 ({len(chapters)}/{expected_count}). 재시도({retry_count}/{max_retries})를 시작합니다.")
                 
                 # 가이드 힌트 준비
                 missing = self._find_missing_episodes(chapters, expected_count)
                 reconciliation_log.append(f"시도 {retry_count}: {len(chapters)}화 추출 (기대 {expected_count})")
                 
-                # 갭 분석 및 패턴 보강
+                # Get current match positions for gap analysis
+                matches = self.splitter.find_matches_with_pos(file_path, chapter_pattern, encoding=encoding)
+                
+                # 동적 갭 분석 및 패턴 보강
                 refined_pattern = self.pattern_manager.refine_pattern_with_goal_v3(
                     file_path,
                     chapter_pattern,
@@ -196,6 +203,36 @@ class ChapterSplitRunner:
                     chapter_pattern = refined_pattern
                     logger.info("   -> [Self-Healing] 수정된 패턴으로 재분할 중...")
                     chapters = list(self.splitter.split(file_path, chapter_pattern, subtitle_pattern, encoding=encoding))
+                    
+                    # If still missing after pattern refinement, try title candidates (on later retries)
+                    if retry_count >= 2 and len(chapters) < expected_count:
+                        logger.info("   -> [Fallback] 타이틀 후보 탐지 시도 중...")
+                        missing_count = expected_count - len(chapters)
+                        
+                        # Find gaps using dynamic detection
+                        gaps = self.pattern_manager.find_dynamic_gaps(file_path, matches, expected_count)
+                        
+                        # Extract title candidates from top gaps
+                        all_candidates = []
+                        for gap in gaps[:3]:  # Top 3 gaps
+                            sample = self.sampler.extract_samples_from(
+                                file_path, gap['start'], length=30000, encoding=encoding
+                            )
+                            if sample:
+                                candidates = self.pattern_manager.extract_title_candidates(
+                                    sample, chapter_pattern
+                                )
+                                all_candidates.extend(candidates)
+                        
+                        if all_candidates:
+                            # Try splitting with explicit title candidates
+                            logger.info(f"   -> [Consensus] {len(all_candidates)} 타이틀 후보로 재분할 시도...")
+                            chapters = list(self.splitter.split(
+                                file_path, chapter_pattern, subtitle_pattern, 
+                                encoding=encoding, title_candidates=all_candidates
+                            ))
+                            title_candidates_used = True
+                            reconciliation_log.append(f"타이틀 후보 {len(all_candidates)}개 사용")
                 else:
                     logger.warning("   -> 패턴 보강에 실패했습니다. 다음 시도로 넘어갑니다.")
             
@@ -208,9 +245,15 @@ class ChapterSplitRunner:
                 missing = self._find_missing_episodes(chapters, expected_count)
                 if missing:
                     reconciliation_log.append(f"누락 의심: {', '.join(map(str, missing[:10]))} 등")
+                
+                # Log recovery methods used
+                if title_candidates_used:
+                    reconciliation_log.append("복구 방법: 패턴 + 타이틀 후보 (consensus)")
             elif expected_count > 0:
                 logger.info(f"   ✅ 화수 100% 일치 확인: {len(chapters)}화 (Perfect Match)")
                 reconciliation_log.append(f"정합성 100% 일치 ({len(chapters)}화)")
+                if title_candidates_used:
+                    reconciliation_log.append("복구 방법: 타이틀 후보 (consensus) 사용됨")
             
             file_info["reconciliation_log"] = "\n".join(reconciliation_log)
             self._verify_chapter_count(file_info["file_name"], len(chapters), chapters)
@@ -236,7 +279,8 @@ class ChapterSplitRunner:
             "patterns": {
                 "chapter_pattern": chapter_pattern,
                 "subtitle_pattern": subtitle_pattern
-            }
+            },
+            "reconciliation_log": file_info.get("reconciliation_log", "")
         }
         
         # 캐시 저장
