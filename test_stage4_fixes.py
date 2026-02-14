@@ -19,7 +19,16 @@ import unittest.mock as mock
 
 # Create mock for GeminiClient before importing
 class MockGeminiClient:
-    """Mock Gemini client for testing"""
+    """Mock Gemini client for testing AI behavior without requiring API keys.
+    
+    This mock allows testing of AI-dependent code paths without making actual API calls.
+    
+    Args:
+        return_value: The value to return from generate_content(). Can be None, empty string,
+                     or any valid response string. Defaults to None.
+        raise_error: If True, generate_content() will raise an Exception. Used to test
+                    error handling. Defaults to False.
+    """
     
     def __init__(self, return_value=None, raise_error=False):
         self.return_value = return_value
@@ -27,7 +36,17 @@ class MockGeminiClient:
         self.call_count = 0
     
     def generate_content(self, prompt):
-        """Mock generate_content"""
+        """Mock generate_content method.
+        
+        Args:
+            prompt: The prompt to generate content for (ignored in mock)
+            
+        Returns:
+            The configured return_value
+            
+        Raises:
+            Exception: If raise_error is True
+        """
         self.call_count += 1
         
         if self.raise_error:
@@ -105,13 +124,13 @@ def test_regex_validation():
     assert result is None, "Expected None for pattern starting with '?'"
     logger.info("    ✓ Leading '?' pattern rejected")
     
-    # Test 2: Reject unclosed named group
-    logger.info("  Testing rejection of unclosed named group...")
+    # Test 2: Reject unclosed named group (mismatched parentheses)
+    logger.info("  Testing rejection of mismatched parentheses...")
     mock_client = MockGeminiClient(return_value="(?P<chapter>\\d+")
     pm = PatternManager(mock_client)
     result = pm._generate_regex_from_ai("test prompt")
-    assert result is None, "Expected None for unclosed named group"
-    logger.info("    ✓ Unclosed named group rejected")
+    assert result is None, "Expected None for mismatched parentheses"
+    logger.info("    ✓ Mismatched parentheses rejected")
     
     # Test 3: Accept valid regex
     logger.info("  Testing acceptance of valid regex...")
@@ -138,40 +157,44 @@ def test_stagnation_detection():
     logger.info("Testing Stagnation Detection")
     logger.info("=" * 60)
     
-    # Simulate the stagnation detection logic
-    STAGNATION_THRESHOLD = 3
-    chapter_count_history = []
+    # Import ChapterSplitRunner to test the helper method
+    # We need to mock the database first
+    import unittest.mock as mock
+    mock_db = mock.MagicMock()
+    
+    # Mock the Database class
+    sys.modules['novel_total_processor.db.schema'] = mock.MagicMock()
+    from novel_total_processor.stages.stage4_splitter import ChapterSplitRunner
+    
+    runner = ChapterSplitRunner(mock_db)
     
     # Test 1: No stagnation (counts change)
     logger.info("  Testing non-stagnant case (changing counts)...")
-    for count in [10, 11, 12]:
-        chapter_count_history.append(count)
-    
-    if len(chapter_count_history) >= STAGNATION_THRESHOLD:
-        recent_counts = chapter_count_history[-STAGNATION_THRESHOLD:]
-        is_stagnant = len(set(recent_counts)) == 1
-        assert not is_stagnant, "Expected no stagnation for changing counts"
+    chapter_count_history = [10, 11, 12]
+    is_stagnant = runner._is_stagnant(chapter_count_history, threshold=3)
+    assert not is_stagnant, "Expected no stagnation for changing counts"
     logger.info("    ✓ No stagnation detected for changing counts")
     
     # Test 2: Stagnation detected (same count)
     logger.info("  Testing stagnant case (same count 3 times)...")
     chapter_count_history = [10, 10, 10]
-    
-    if len(chapter_count_history) >= STAGNATION_THRESHOLD:
-        recent_counts = chapter_count_history[-STAGNATION_THRESHOLD:]
-        is_stagnant = len(set(recent_counts)) == 1
-        assert is_stagnant, "Expected stagnation for same counts"
+    is_stagnant = runner._is_stagnant(chapter_count_history, threshold=3)
+    assert is_stagnant, "Expected stagnation for same counts"
     logger.info("    ✓ Stagnation detected for repeated counts")
     
     # Test 3: Stagnation after initial change
     logger.info("  Testing stagnation after initial changes...")
     chapter_count_history = [8, 10, 10, 10, 10]
-    
-    if len(chapter_count_history) >= STAGNATION_THRESHOLD:
-        recent_counts = chapter_count_history[-STAGNATION_THRESHOLD:]
-        is_stagnant = len(set(recent_counts)) == 1
-        assert is_stagnant, "Expected stagnation for last 3 same counts"
+    is_stagnant = runner._is_stagnant(chapter_count_history, threshold=3)
+    assert is_stagnant, "Expected stagnation for last 3 same counts"
     logger.info("    ✓ Stagnation detected after initial improvement")
+    
+    # Test 4: Not enough history
+    logger.info("  Testing insufficient history...")
+    chapter_count_history = [10, 10]
+    is_stagnant = runner._is_stagnant(chapter_count_history, threshold=3)
+    assert not is_stagnant, "Expected no stagnation with insufficient history"
+    logger.info("    ✓ No stagnation with insufficient history")
     
     logger.info("✅ All stagnation detection tests passed")
 

@@ -154,9 +154,12 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
                     logger.warning(f"   ⚠️  Rejecting invalid pattern (starts with '?'): {result}")
                     return None
                 
-                # Check for unescaped patterns that might cause issues
-                if '(?P<' in result and ')' not in result[result.index('(?P<'):]:
-                    logger.warning(f"   ⚠️  Rejecting pattern with unclosed named group: {result}")
+                # Check for properly matched parentheses and valid named groups
+                # Count opening and closing parentheses
+                open_parens = result.count('(')
+                close_parens = result.count(')')
+                if open_parens != close_parens:
+                    logger.warning(f"   ⚠️  Rejecting pattern with mismatched parentheses: {result}")
                     return None
                 
                 try:

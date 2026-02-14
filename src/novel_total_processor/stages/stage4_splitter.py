@@ -263,16 +263,13 @@ class ChapterSplitRunner:
                 
                 # Fix #4: Check for stagnation (no chapter count change for 3 consecutive attempts)
                 chapter_count_history.append(len(chapters))
-                if len(chapter_count_history) >= STAGNATION_THRESHOLD:
-                    # Check if last N attempts had the same count
-                    recent_counts = chapter_count_history[-STAGNATION_THRESHOLD:]
-                    if len(set(recent_counts)) == 1:  # All counts are the same
-                        logger.warning("=" * 60)
-                        logger.warning(f"   🚨 Stagnation detected: no chapter count change for {STAGNATION_THRESHOLD} attempts")
-                        logger.warning(f"   🚀 Triggering early escalation to advanced pipeline...")
-                        logger.warning("=" * 60)
-                        reconciliation_log.append(f"정체 감지: {STAGNATION_THRESHOLD}회 연속 동일 화수 ({len(chapters)}화)")
-                        break  # Exit retry loop and proceed to advanced escalation
+                if self._is_stagnant(chapter_count_history, STAGNATION_THRESHOLD):
+                    logger.warning("=" * 60)
+                    logger.warning(f"   🚨 Stagnation detected: no chapter count change for {STAGNATION_THRESHOLD} attempts")
+                    logger.warning(f"   🚀 Triggering early escalation to advanced pipeline...")
+                    logger.warning("=" * 60)
+                    reconciliation_log.append(f"정체 감지: {STAGNATION_THRESHOLD}회 연속 동일 화수 ({len(chapters)}화)")
+                    break  # Exit retry loop and proceed to advanced escalation
                 
                 # 가이드 힌트 준비
                 missing = self._find_missing_episodes(chapters, expected_count)
@@ -660,6 +657,22 @@ class ChapterSplitRunner:
             if i not in found_nums:
                 missing.append(i)
         return missing
+    
+    def _is_stagnant(self, chapter_count_history: List[int], threshold: int = 3) -> bool:
+        """Check if chapter count has stagnated (no change for N consecutive attempts)
+        
+        Args:
+            chapter_count_history: List of chapter counts from retry attempts
+            threshold: Number of consecutive attempts with same count to consider stagnant
+            
+        Returns:
+            True if stagnated, False otherwise
+        """
+        if len(chapter_count_history) < threshold:
+            return False
+        
+        recent_counts = chapter_count_history[-threshold:]
+        return len(set(recent_counts)) == 1  # All counts are the same
 
     def save_to_db(self, file_id: int, result: Dict[str, Any]) -> None:
         """DB에 저장
