@@ -255,20 +255,26 @@ class ChapterSplitRunner:
             
             # Fix #4: Track chapter count history for stagnation detection
             chapter_count_history = []
-            STAGNATION_THRESHOLD = 3  # Number of attempts with no change to trigger escalation
+            STAGNATION_THRESHOLD = 3  # Number of attempts with no meaningful change to trigger escalation
+            
+            # Requirement #2: Track consecutive pattern refinement rejections
+            consecutive_rejection_count = 0
+            REJECTION_THRESHOLD = 2  # Trigger escalation after 2 consecutive rejections
             
             while expected_count > 0 and len(chapters) != expected_count and retry_count < self.MAX_RETRIES:
                 retry_count += 1
                 logger.error(f"   ❌ [Mismatch] 화수 불일치 감지 ({len(chapters)}/{expected_count}). 재시도({retry_count}/{self.MAX_RETRIES})를 시작합니다.")
                 
-                # Fix #4: Check for stagnation (no chapter count change for 3 consecutive attempts)
+                # Fix #4: Check for stagnation (no meaningful chapter count change for 3 consecutive attempts)
                 chapter_count_history.append(len(chapters))
                 if self._is_stagnant(chapter_count_history, STAGNATION_THRESHOLD):
                     logger.warning("=" * 60)
-                    logger.warning(f"   🚨 Stagnation detected: no chapter count change for {STAGNATION_THRESHOLD} attempts")
+                    logger.warning(f"   🚨 Escalation reason: Stagnation detected")
+                    logger.warning(f"      → No meaningful change (+/-2 or less) for {STAGNATION_THRESHOLD} consecutive attempts")
+                    logger.warning(f"      → Chapter counts: {chapter_count_history[-STAGNATION_THRESHOLD:]}")
                     logger.warning(f"   🚀 Triggering early escalation to advanced pipeline...")
                     logger.warning("=" * 60)
-                    reconciliation_log.append(f"정체 감지: {STAGNATION_THRESHOLD}회 연속 동일 화수 ({len(chapters)}화)")
+                    reconciliation_log.append(f"정체 감지: {STAGNATION_THRESHOLD}회 연속 미미한 변화 ({chapter_count_history[-STAGNATION_THRESHOLD:]})")
                     break  # Exit retry loop and proceed to advanced escalation
                 
                 # 가이드 힌트 준비
@@ -278,13 +284,28 @@ class ChapterSplitRunner:
                 # Get current match positions for gap analysis
                 matches = self.splitter.find_matches_with_pos(file_path, chapter_pattern, encoding=encoding)
                 
-                # 동적 갭 분석 및 패턴 보강
-                refined_pattern = self.pattern_manager.refine_pattern_with_goal_v3(
+                # 동적 갭 분석 및 패턴 보강 (with rejection tracking)
+                refined_pattern, rejection_count = self.pattern_manager.refine_pattern_with_goal_v3(
                     file_path,
                     chapter_pattern,
                     expected_count,
-                    encoding=encoding
+                    encoding=encoding,
+                    max_gaps=self.MAX_GAPS_TO_ANALYZE
                 )
+                
+                # Requirement #2: Track consecutive rejections
+                if rejection_count > 0:
+                    consecutive_rejection_count += rejection_count
+                    if consecutive_rejection_count >= REJECTION_THRESHOLD:
+                        logger.warning("=" * 60)
+                        logger.warning(f"   🚨 Escalation reason: Consecutive pattern refinement rejections")
+                        logger.warning(f"      → {consecutive_rejection_count} consecutive rejections detected")
+                        logger.warning(f"   🚀 Triggering immediate escalation to advanced pipeline...")
+                        logger.warning("=" * 60)
+                        reconciliation_log.append(f"연속 거절: {consecutive_rejection_count}회 패턴 보강 거절")
+                        break  # Exit retry loop and proceed to advanced escalation
+                else:
+                    consecutive_rejection_count = 0  # Reset on success
                 
                 if refined_pattern != chapter_pattern:
                     chapter_pattern = refined_pattern
@@ -299,7 +320,7 @@ class ChapterSplitRunner:
                         # Find gaps using dynamic detection
                         gaps = self.pattern_manager.find_dynamic_gaps(file_path, matches, expected_count)
                         
-                        # Extract title candidates from top gaps
+                        # Extract title candidates from top gaps (limited by MAX_GAPS_TO_ANALYZE)
                         all_candidates = []
                         for gap in gaps[:self.MAX_GAPS_TO_ANALYZE]:
                             sample = self.sampler.extract_samples_from(
@@ -676,11 +697,13 @@ class ChapterSplitRunner:
         return missing
     
     def _is_stagnant(self, chapter_count_history: List[int], threshold: int = 3) -> bool:
-        """Check if chapter count has stagnated (no change for N consecutive attempts)
+        """Check if chapter count has stagnated (no meaningful change for N consecutive attempts)
+        
+        Treats +/-1 or +/-2 fluctuations as stagnant to reliably trigger escalation.
         
         Args:
             chapter_count_history: List of chapter counts from retry attempts
-            threshold: Number of consecutive attempts with same count to consider stagnant
+            threshold: Number of consecutive attempts with no meaningful change to consider stagnant
             
         Returns:
             True if stagnated, False otherwise
@@ -689,7 +712,10 @@ class ChapterSplitRunner:
             return False
         
         recent_counts = chapter_count_history[-threshold:]
-        return len(set(recent_counts)) == 1  # All counts are the same
+        # Check if all counts are within +/-2 of each other (treat as stagnant)
+        min_count = min(recent_counts)
+        max_count = max(recent_counts)
+        return (max_count - min_count) <= 2  # Fluctuations of +/-1 or +/-2 are stagnant
 
     def save_to_db(self, file_id: int, result: Dict[str, Any]) -> None:
         """DB에 저장
