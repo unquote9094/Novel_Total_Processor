@@ -348,31 +348,86 @@ class ChapterSplitRunner:
             if expected_count > 0 and len(chapters) != expected_count:
                 logger.warning("=" * 60)
                 logger.warning(f"   🚨 Pattern-based methods exhausted ({len(chapters)}/{expected_count})")
-                logger.warning(f"   🚀 Activating Advanced Stage 4 Escalation Pipeline...")
                 logger.warning("=" * 60)
                 
-                # Try advanced escalation
-                advanced_chapters = self._advanced_escalation_pipeline(
-                    file_path,
-                    expected_count,
-                    encoding,
-                    reconciliation_log
-                )
+                # Step 1: Try Level 3 AI direct search first (faster and more accurate than Advanced Pipeline)
+                logger.info(f"   🚀 Step 1: Attempting Level 3 AI direct title search...")
                 
-                if advanced_chapters and len(advanced_chapters) == expected_count:
-                    logger.info(f"   ✅ Advanced escalation SUCCESS: {len(advanced_chapters)} chapters")
-                    chapters = advanced_chapters
-                    reconciliation_log.append(f"Advanced escalation 성공: {len(chapters)}화 추출")
-                elif advanced_chapters:
-                    logger.warning(f"   ⚠️  Advanced escalation partial: {len(advanced_chapters)}/{expected_count}")
-                    # Use if closer to target than current
-                    if abs(len(advanced_chapters) - expected_count) < abs(len(chapters) - expected_count):
-                        logger.info("   -> 부분 성공이지만 기존보다 나음. 적용합니다.")
+                try:
+                    # Get current matches for context
+                    existing_matches = self.splitter.find_matches_with_pos(file_path, chapter_pattern, encoding=encoding)
+                    
+                    # Call Level 3 direct search
+                    found_titles = self.pattern_manager.direct_ai_title_search(
+                        file_path, chapter_pattern, expected_count, existing_matches, encoding
+                    )
+                    
+                    if found_titles and len(found_titles) >= expected_count * 0.5:
+                        logger.info(f"   ✨ [Level 3] Found {len(found_titles)} titles via AI direct search")
+                        
+                        # Build pattern from found titles (reverse extraction)
+                        reverse_pattern = self.pattern_manager._build_pattern_from_examples(found_titles)
+                        
+                        if reverse_pattern:
+                            # Combine with existing pattern
+                            combined_pattern = f"{chapter_pattern}|{reverse_pattern}"
+                            logger.info(f"   🔧 Testing combined pattern with reverse-extracted regex...")
+                            
+                            # Try splitting with combined pattern
+                            level3_chapters = list(self.splitter.split(
+                                file_path, combined_pattern, subtitle_pattern, encoding=encoding
+                            ))
+                            
+                            # Check if Level 3 succeeded
+                            if len(level3_chapters) == expected_count:
+                                logger.info(f"   ✅ [Level 3 SUCCESS] Exact match: {len(level3_chapters)} chapters")
+                                chapters = level3_chapters
+                                chapter_pattern = combined_pattern
+                                reconciliation_log.append(f"Level 3 AI 직접 탐색 성공: {len(chapters)}화")
+                            elif abs(len(level3_chapters) - expected_count) < abs(len(chapters) - expected_count):
+                                logger.info(f"   ✨ [Level 3 Improved] Better result: {len(chapters)} -> {len(level3_chapters)}")
+                                chapters = level3_chapters
+                                chapter_pattern = combined_pattern
+                                reconciliation_log.append(f"Level 3 개선: {len(chapters)}화")
+                            else:
+                                logger.info(f"   ℹ️  [Level 3] No improvement ({len(level3_chapters)} vs {len(chapters)})")
+                        else:
+                            logger.warning(f"   ⚠️  [Level 3] Failed to build reverse pattern")
+                    else:
+                        logger.info(f"   ℹ️  [Level 3] Insufficient titles found ({len(found_titles) if found_titles else 0})")
+                        
+                except Exception as e:
+                    logger.error(f"   ❌ [Level 3] Error during direct search: {e}")
+                    import traceback
+                    logger.debug(traceback.format_exc())
+                
+                # Step 2: If Level 3 didn't achieve exact match, try Advanced Pipeline as fallback
+                if len(chapters) != expected_count:
+                    logger.warning(f"   🚀 Step 2: Activating Advanced Escalation Pipeline (fallback)...")
+                    logger.warning("=" * 60)
+                    
+                    # Try advanced escalation
+                    advanced_chapters = self._advanced_escalation_pipeline(
+                        file_path,
+                        expected_count,
+                        encoding,
+                        reconciliation_log
+                    )
+                    
+                    if advanced_chapters and len(advanced_chapters) == expected_count:
+                        logger.info(f"   ✅ Advanced escalation SUCCESS: {len(advanced_chapters)} chapters")
                         chapters = advanced_chapters
-                        reconciliation_log.append(f"Advanced escalation 부분 성공: {len(chapters)}화")
-                else:
-                    logger.error("   ❌ Advanced escalation failed")
-                    reconciliation_log.append("Advanced escalation 실패")
+                        reconciliation_log.append(f"Advanced escalation 성공: {len(chapters)}화 추출")
+                    elif advanced_chapters:
+                        logger.warning(f"   ⚠️  Advanced escalation partial: {len(advanced_chapters)}/{expected_count}")
+                        # Use if closer to target than current
+                        if abs(len(advanced_chapters) - expected_count) < abs(len(chapters) - expected_count):
+                            logger.info("   -> 부분 성공이지만 기존보다 나음. 적용합니다.")
+                            chapters = advanced_chapters
+                            reconciliation_log.append(f"Advanced escalation 부분 성공: {len(chapters)}화")
+                    else:
+                        logger.error("   ❌ Advanced escalation failed")
+                        reconciliation_log.append("Advanced escalation 실패")
             
             # 최종 정합성 로그 기록
             if expected_count > 0 and len(chapters) != expected_count:
