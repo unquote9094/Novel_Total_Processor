@@ -14,7 +14,13 @@ logger = get_logger(__name__)
 
 
 class Splitter:
-    """Regex 패턴을 사용하여 대용량 텍스트 파일을 챕터 단위로 분할 (v3.0 Reference)"""
+    """Regex 패턴을 사용하여 대용량 텍스트 파일을 챕터 단위로 분할 (v3.0 Reference)
+    
+    Enhanced Features:
+    - Support for explicit title candidate lines (fallback when regex misses chapters)
+    - Multi-line title support (merge title candidate + true title)
+    - Aggressive title trimming (20-char threshold for body vs subtitle)
+    """
     
     def __init__(self):
         self.title_candidates = []  # Explicit title lines for fallback splitting

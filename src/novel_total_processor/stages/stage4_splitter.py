@@ -169,6 +169,7 @@ class ChapterSplitRunner:
             chapters = list(self.splitter.split(file_path, chapter_pattern, subtitle_pattern, encoding=encoding))
             
             # 3-1. 정합성 검증 및 자동 재분석 (M-29/45/49: Zero Tolerance 100% Match)
+            # Enhanced with multi-signal recovery: pattern → verify → gaps → title candidates → consensus
             nums = re.findall(r'\d+', file_info["file_name"])
             expected_count = int(nums[-1]) if nums else 0
             

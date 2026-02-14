@@ -17,7 +17,13 @@ logger = get_logger(__name__)
 
 
 class PatternManager:
-    """AI를 사용하여 소설의 최적 챕터 분할 패턴을 찾아내고 검증 (v3.0 Reference)"""
+    """AI를 사용하여 소설의 최적 챕터 분할 패턴을 찾아내고 검증 (v3.0 Reference)
+    
+    Enhanced Features:
+    - Dynamic gap detection based on expected chapter count and average size
+    - AI-based title candidate extraction with consensus voting
+    - Multi-signal recovery for mixed/irregular chapter patterns
+    """
     
     def __init__(self, client: GeminiClient):
         self.client = client
