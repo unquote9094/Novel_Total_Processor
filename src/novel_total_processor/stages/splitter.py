@@ -1,7 +1,7 @@
-"""텍스트 분할기 (Reference v3.0 기반 고도화)
+"""Splitter for Chapter Text
 
-Regex 패턴을 사용하여 대용량 텍스트 파일을 챕터 단위로 분할
-Aggressive Title Trimming: 제목과 본문의 엄격한 분리 (20자 기준)
+Regex pattern-based text splitter with support for explicit title candidates.
+Enhanced with permissive pattern detection to avoid matching body text as titles.
 """
 
 import re
@@ -21,6 +21,9 @@ class Splitter:
     - Multi-line title support (merge title candidate + true title)
     - Aggressive title trimming (20-char threshold for body vs subtitle)
     """
+    
+    # Permissive patterns that match any non-empty line
+    PERMISSIVE_PATTERNS = [r'.+', r'.', r'.*']
     
     # Multi-line title detection constants
     # BRACKET_PATTERN_LENGTH: Check first 50 chars for bracket patterns to detect multi-line titles
@@ -68,7 +71,7 @@ class Splitter:
         using_explicit_titles = bool(title_candidates)
         
         # Check if pattern is permissive (matches any line)
-        is_permissive_pattern = (pattern_str in [r'.+', r'.', r'.*'])
+        is_permissive_pattern = (pattern_str in self.PERMISSIVE_PATTERNS)
         
         # Debug logging for title_candidates mode
         if using_explicit_titles:

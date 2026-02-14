@@ -517,7 +517,9 @@ class ChapterSplitRunner:
             # Stage 5: Split using selected boundaries
             logger.info("   📝 [Pipeline Stage 5/5] Splitting chapters using selected boundaries...")
             logger.info(f"      → Boundaries: {len(selected)} (format: line_num/text/byte_pos)")
-            logger.info(f"      → Sample: line={selected[0]['line_num']}, text='{selected[0]['text'][:30]}...'")
+            if selected:
+                sample_text = selected[0]['text']
+                logger.info(f"      → Sample: line={selected[0]['line_num']}, text='{sample_text[:30] if len(sample_text) > 30 else sample_text}...'")
             
             # Extract and validate title lines from selected candidates
             title_lines = [cand['text'] for cand in selected if cand.get('text', '').strip()]

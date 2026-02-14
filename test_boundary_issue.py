@@ -76,11 +76,14 @@ def test_full_pipeline_with_permissive_pattern():
 장소 표시 챕터입니다. """ + ("본문 내용. " * 100) + """
 """
     
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
-        test_file = f.name
-        f.write(test_content)
-    
+    # Use mkstemp for safer temp file handling
+    import tempfile
+    fd, test_file = tempfile.mkstemp(suffix='.txt', text=True)
     try:
+        # Write test content
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(test_content)
+        
         expected_count = 5
         
         logger.info("=" * 80)
@@ -134,6 +137,7 @@ def test_full_pipeline_with_permissive_pattern():
         logger.info("   - All chapters have non-empty body text")
         
     finally:
+        # Cleanup temp file
         os.unlink(test_file)
 
 
