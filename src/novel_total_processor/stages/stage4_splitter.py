@@ -17,6 +17,10 @@ from novel_total_processor.stages.pattern_manager import PatternManager
 from novel_total_processor.stages.splitter import Splitter
 from novel_total_processor.stages.chapter import Chapter
 from novel_total_processor.stages.stage3_filename import FilenameGenerator
+from novel_total_processor.stages.structural_analyzer import StructuralAnalyzer
+from novel_total_processor.stages.ai_scorer import AIScorer
+from novel_total_processor.stages.global_optimizer import GlobalOptimizer
+from novel_total_processor.stages.topic_change_detector import TopicChangeDetector
 
 logger = get_logger(__name__)
 
@@ -41,6 +45,12 @@ class ChapterSplitRunner:
         self.pattern_manager = PatternManager(self.client)
         self.splitter = Splitter()
         self.filename_generator = FilenameGenerator(self.db)
+        
+        # Advanced escalation components
+        self.structural_analyzer = StructuralAnalyzer()
+        self.ai_scorer = AIScorer(self.client)
+        self.global_optimizer = GlobalOptimizer()
+        self.topic_detector = TopicChangeDetector(self.client)
         
         # 캐시 디렉토리
         self.cache_dir = Path("data/cache/chapter_split")
@@ -152,6 +162,59 @@ class ChapterSplitRunner:
             
             chapter_pattern = "EPUB_STRUCTURE"
             subtitle_pattern = None
+            
+            # EPUB fallback: Check chapter count against expected
+            nums = re.findall(r'\d+', file_info["file_name"])
+            expected_count = int(nums[-1]) if nums else 0
+            
+            if expected_count > 0 and len(chapters) != expected_count:
+                logger.warning(f"   ⚠️  EPUB chapter count mismatch ({len(chapters)}/{expected_count})")
+                logger.info(f"   🔄 Attempting text-based fallback for EPUB...")
+                
+                # Try to extract text from EPUB and use text-based splitting
+                try:
+                    # Extract full text from EPUB
+                    full_text = []
+                    for item_id in spine_ids:
+                        item = book.get_item_with_id(item_id)
+                        if item and item.get_type() == 9:
+                            content = item.get_content().decode('utf-8', errors='ignore')
+                            text_only = re.sub(r'<[^>]*>', '', content).strip()
+                            if text_only:
+                                full_text.append(text_only)
+                    
+                    # Write to temp file for text-based processing
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as tmp:
+                        tmp_path = tmp.name
+                        tmp.write('\n\n'.join(full_text))
+                    
+                    # Try text-based advanced escalation
+                    logger.info(f"   -> Extracted EPUB text to temp file, running text-based splitting...")
+                    reconciliation_log = []
+                    text_chapters = self._advanced_escalation_pipeline(
+                        tmp_path,
+                        expected_count,
+                        'utf-8',
+                        reconciliation_log
+                    )
+                    
+                    # Clean up temp file
+                    import os
+                    os.unlink(tmp_path)
+                    
+                    if text_chapters and len(text_chapters) == expected_count:
+                        logger.info(f"   ✅ EPUB text-based fallback SUCCESS: {len(text_chapters)} chapters")
+                        chapters = text_chapters
+                        chapter_pattern = "EPUB_TEXT_FALLBACK"
+                    else:
+                        logger.warning(f"   ⚠️  EPUB text-based fallback partial/failed")
+                        logger.info(f"   -> Keeping original EPUB structure ({len(chapters)} chapters)")
+                        
+                except Exception as e:
+                    logger.error(f"   ❌ EPUB text-based fallback error: {e}")
+                    logger.info(f"   -> Keeping original EPUB structure ({len(chapters)} chapters)")
+            
         else:
             # 1. 샘플 추출 (M-16: Dynamic Encoding 적용)
             logger.info(f"   -> 샘플 추출 중... (30개 균등 샘플, 인코딩: {encoding})")
@@ -241,6 +304,36 @@ class ChapterSplitRunner:
                 else:
                     logger.warning("   -> 패턴 보강에 실패했습니다. 다음 시도로 넘어갑니다.")
             
+            # [Stage 4 Advanced Escalation] - Activate if pattern-based methods failed
+            if expected_count > 0 and len(chapters) != expected_count:
+                logger.warning("=" * 60)
+                logger.warning(f"   🚨 Pattern-based methods exhausted ({len(chapters)}/{expected_count})")
+                logger.warning(f"   🚀 Activating Advanced Stage 4 Escalation Pipeline...")
+                logger.warning("=" * 60)
+                
+                # Try advanced escalation
+                advanced_chapters = self._advanced_escalation_pipeline(
+                    file_path,
+                    expected_count,
+                    encoding,
+                    reconciliation_log
+                )
+                
+                if advanced_chapters and len(advanced_chapters) == expected_count:
+                    logger.info(f"   ✅ Advanced escalation SUCCESS: {len(advanced_chapters)} chapters")
+                    chapters = advanced_chapters
+                    reconciliation_log.append(f"Advanced escalation 성공: {len(chapters)}화 추출")
+                elif advanced_chapters:
+                    logger.warning(f"   ⚠️  Advanced escalation partial: {len(advanced_chapters)}/{expected_count}")
+                    # Use if closer to target than current
+                    if abs(len(advanced_chapters) - expected_count) < abs(len(chapters) - expected_count):
+                        logger.info("   -> 부분 성공이지만 기존보다 나음. 적용합니다.")
+                        chapters = advanced_chapters
+                        reconciliation_log.append(f"Advanced escalation 부분 성공: {len(chapters)}화")
+                else:
+                    logger.error("   ❌ Advanced escalation failed")
+                    reconciliation_log.append("Advanced escalation 실패")
+            
             # 최종 정합성 로그 기록
             if expected_count > 0 and len(chapters) != expected_count:
                 reason = f"최종 화수 불일치: 보유 {len(chapters)} / 웹(또는 힌트) {expected_count}"
@@ -267,6 +360,127 @@ class ChapterSplitRunner:
         
         # 4. 챕터 제목 분석 (본편/외전/에필로그 분류)
         summary = self._analyze_chapter_types(chapters)
+    
+    def _advanced_escalation_pipeline(
+        self,
+        file_path: str,
+        expected_count: int,
+        encoding: str,
+        reconciliation_log: List[str]
+    ) -> Optional[List[Chapter]]:
+        """Advanced Stage 4 escalation pipeline with AI-scored candidates and global optimization
+        
+        Pipeline stages:
+        1. Structural analysis: Generate transition point candidates
+        2. AI scoring: Score each candidate for likelihood
+        3. Topic change detection: Add semantic boundaries as fallback
+        4. Global optimization: Select exactly expected_count boundaries
+        5. Split using selected boundaries
+        
+        Args:
+            file_path: Path to the novel file
+            expected_count: Expected number of chapters
+            encoding: File encoding
+            reconciliation_log: Log list to append messages
+            
+        Returns:
+            List of Chapter objects or None if failed
+        """
+        try:
+            # Stage 1: Generate structural candidates
+            logger.info("   📊 Stage 1: Structural transition point analysis...")
+            candidates = self.structural_analyzer.generate_candidates(
+                file_path,
+                encoding=encoding,
+                max_candidates=expected_count * 5  # Generate 5x for good coverage
+            )
+            
+            if not candidates:
+                logger.error("   ❌ No structural candidates found")
+                return None
+            
+            logger.info(f"   ✅ Generated {len(candidates)} structural candidates")
+            reconciliation_log.append(f"구조 분석: {len(candidates)} 후보 생성")
+            
+            # Stage 2: AI scoring (optional, can be expensive for large candidate sets)
+            # Only score if we have a reasonable number of candidates
+            if len(candidates) <= 200:  # Limit to prevent excessive API calls
+                logger.info("   🤖 Stage 2: AI likelihood scoring...")
+                candidates = self.ai_scorer.score_candidates(
+                    file_path,
+                    candidates,
+                    encoding=encoding,
+                    batch_size=10
+                )
+                logger.info("   ✅ AI scoring complete")
+                reconciliation_log.append("AI 스코어링 완료")
+            else:
+                logger.warning(f"   ⚠️  Too many candidates ({len(candidates)}), skipping AI scoring")
+                reconciliation_log.append(f"AI 스코어링 스킵 (후보 수 과다: {len(candidates)})")
+            
+            # Stage 3: Topic change detection (if we still need more coverage)
+            if len(candidates) < expected_count * 2:
+                logger.info("   🔍 Stage 3: Topic change detection (fallback)...")
+                topic_candidates = self.topic_detector.detect_topic_boundaries(
+                    file_path,
+                    expected_count,
+                    existing_candidates=candidates,
+                    encoding=encoding
+                )
+                
+                if topic_candidates:
+                    logger.info(f"   ✅ Added {len(topic_candidates)} topic-change candidates")
+                    candidates.extend(topic_candidates)
+                    reconciliation_log.append(f"토픽 변화 감지: {len(topic_candidates)} 후보 추가")
+                else:
+                    logger.info("   ℹ️  No topic-change candidates found")
+            
+            # Stage 4: Global optimization
+            logger.info(f"   🎯 Stage 4: Global optimization (select {expected_count} from {len(candidates)})...")
+            selected = self.global_optimizer.select_optimal_boundaries(
+                candidates,
+                expected_count,
+                file_path,
+                encoding=encoding
+            )
+            
+            if not selected:
+                logger.error("   ❌ Optimization failed to select boundaries")
+                return None
+            
+            if len(selected) != expected_count:
+                logger.warning(f"   ⚠️  Optimizer returned {len(selected)}/{expected_count} boundaries")
+            
+            logger.info(f"   ✅ Selected {len(selected)} optimal boundaries")
+            reconciliation_log.append(f"최적화: {len(selected)}개 경계 선택")
+            
+            # Stage 5: Split using selected boundaries
+            logger.info("   📝 Stage 5: Splitting chapters using selected boundaries...")
+            
+            # Extract title lines from selected candidates
+            title_lines = [cand['text'] for cand in selected]
+            
+            # Use splitter with these explicit title candidates
+            # We use a very permissive pattern since we already have exact titles
+            permissive_pattern = r'.+'  # Match any non-empty line
+            
+            chapters = list(self.splitter.split(
+                file_path,
+                permissive_pattern,
+                subtitle_pattern=None,
+                encoding=encoding,
+                title_candidates=title_lines
+            ))
+            
+            logger.info(f"   ✅ Advanced pipeline complete: {len(chapters)} chapters extracted")
+            
+            return chapters
+            
+        except Exception as e:
+            logger.error(f"   ❌ Advanced escalation pipeline error: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
         
         # 5. 결과 저장
         result = {
