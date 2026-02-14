@@ -45,6 +45,7 @@ class ChapterSplitRunner:
     MIN_VALID_CHAPTER_LENGTH = 100  # Minimum characters for a valid chapter
     MAX_EMPTY_CHAPTER_RATIO = 0.1  # Maximum ratio of empty chapters (10%)
     MIN_AVG_CHAPTER_LENGTH = 500  # Minimum average chapter length in characters
+    MIN_DISTANCE_FROM_ANCHOR = 10  # Minimum line distance from anchors when filtering candidates
     
     def __init__(self, db: Database):
         """
@@ -568,12 +569,11 @@ class ChapterSplitRunner:
             if anchor_boundaries and len(candidates) > 200:
                 logger.info(f"   🔧 Filtering candidates near anchors to reduce AI scoring load...")
                 filtered_candidates = []
-                MIN_DISTANCE_FROM_ANCHOR = 10  # lines
                 
                 for cand in candidates:
                     is_near_anchor = False
                     for anchor in anchor_boundaries:
-                        if abs(cand['line_num'] - anchor['line_num']) < MIN_DISTANCE_FROM_ANCHOR:
+                        if abs(cand['line_num'] - anchor['line_num']) < self.MIN_DISTANCE_FROM_ANCHOR:
                             is_near_anchor = True
                             break
                     if not is_near_anchor:

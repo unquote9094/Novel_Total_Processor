@@ -26,6 +26,7 @@ class StructuralAnalyzer:
     MIN_BLANK_LINES = 1  # Minimum blank lines before a potential chapter
     CONTEXT_LINES = 3  # Lines to check before/after for context
     MAX_DIALOGUE_LENGTH = 40  # Maximum length for short dialogue/exclamation detection
+    MIN_LINES_BETWEEN = 10  # Minimum line distance between candidates
     
     # Punctuation patterns that suggest chapter boundaries
     CHAPTER_INDICATORS = [
@@ -120,11 +121,10 @@ class StructuralAnalyzer:
                     break
             
             # Filter candidates to maintain minimum line distance
-            MIN_LINES_BETWEEN = 10
             filtered = []
-            last_line = -MIN_LINES_BETWEEN
+            last_line = -self.MIN_LINES_BETWEEN
             for cand in sorted(candidates, key=lambda x: x['line_num']):
-                if cand['line_num'] - last_line >= MIN_LINES_BETWEEN:
+                if cand['line_num'] - last_line >= self.MIN_LINES_BETWEEN:
                     filtered.append(cand)
                     last_line = cand['line_num']
             
