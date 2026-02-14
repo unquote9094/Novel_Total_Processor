@@ -54,7 +54,8 @@ class GlobalOptimizer:
         # Calculate combined scores
         scored_candidates = self._calculate_combined_scores(candidates)
         
-        # Get file size for distance calculations
+        # Get file size and lines for distance calculations
+        lines = None
         try:
             file_size = os.path.getsize(file_path)
             
@@ -71,6 +72,7 @@ class GlobalOptimizer:
         except Exception as e:
             logger.warning(f"Could not calculate positions: {e}")
             file_size = 0
+            lines = None
             for cand in scored_candidates:
                 # Fallback: estimate position based on line number
                 cand['byte_pos'] = cand['line_num'] * self.ESTIMATED_AVG_LINE_BYTES
@@ -92,10 +94,15 @@ class GlobalOptimizer:
             for anchor in anchor_boundaries:
                 if 'byte_pos' not in anchor:
                     line_num = anchor['line_num']
-                    try:
-                        anchor['byte_pos'] = sum(len(line.encode(encoding, errors='replace')) 
-                                               for line in lines[:line_num])
-                    except:
+                    # Only use lines if they were successfully loaded
+                    if lines is not None:
+                        try:
+                            anchor['byte_pos'] = sum(len(line.encode(encoding, errors='replace')) 
+                                                   for line in lines[:line_num])
+                        except:
+                            # Fallback: estimate position based on line number
+                            anchor['byte_pos'] = line_num * self.ESTIMATED_AVG_LINE_BYTES
+                    else:
                         # Fallback: estimate position based on line number
                         anchor['byte_pos'] = line_num * self.ESTIMATED_AVG_LINE_BYTES
             

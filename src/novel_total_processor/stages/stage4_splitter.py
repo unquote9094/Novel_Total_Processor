@@ -737,7 +737,7 @@ class ChapterSplitRunner:
             
         except Exception as e:
             logger.warning(f"Could not convert pos to line_num: {e}")
-            # Fallback: estimate line number based on average line length
+            # Fallback: estimate line number based on average bytes per line
             return pos // self.ESTIMATED_AVG_LINE_BYTES
     
     def _analyze_chapter_types(self, chapters: List[Chapter]) -> Dict[str, Any]:

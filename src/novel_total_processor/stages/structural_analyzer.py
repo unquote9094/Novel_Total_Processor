@@ -162,18 +162,19 @@ class StructuralAnalyzer:
             'word_count': len(line.split()),
         }
         
-        # Check for dialogue (quoted text or short exclamations)
-        features['is_dialogue'] = bool(re.match(r'^["\'「『"].+["\'」』"]$', line)) or \
-                                   bool(re.match(rf'^.{{1,{self.MAX_DIALOGUE_LENGTH}}}[?!？！]$', line))
-        
-        # Check for sentence endings (but not chapter indicators)
-        features['is_sentence'] = bool(re.search(r'[.。다요죠습]$', line)) and not features.get('has_chapter_indicator')
-        
-        # Check for chapter indicators
+        # Check for chapter indicators first (needed for sentence detection)
         for pattern in self.indicator_patterns:
             if pattern.search(line):
                 features['has_chapter_indicator'] = True
                 break
+        
+        # Check for dialogue (quoted text or short exclamations)
+        dialogue_pattern = f'^.{{1,{self.MAX_DIALOGUE_LENGTH}}}[?!？！]$'
+        features['is_dialogue'] = bool(re.match(r'^["\'「『"].+["\'」』"]$', line)) or \
+                                   bool(re.match(dialogue_pattern, line))
+        
+        # Check for sentence endings (but not chapter indicators)
+        features['is_sentence'] = bool(re.search(r'[.。다요죠습]$', line)) and not features['has_chapter_indicator']
         
         # Check for time/place markers
         for pattern in self.time_place_patterns:
