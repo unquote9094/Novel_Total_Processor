@@ -169,9 +169,9 @@ class StructuralAnalyzer:
                 break
         
         # Check for dialogue (quoted text or short exclamations)
-        dialogue_pattern = f'^.{{1,{self.MAX_DIALOGUE_LENGTH}}}[?!？！]$'
-        features['is_dialogue'] = bool(re.match(r'^["\'「『"].+["\'」』"]$', line)) or \
-                                   bool(re.match(dialogue_pattern, line))
+        # Optimized for Korean novel dialogue patterns
+        features['is_dialogue'] = bool(re.match(r'^["\'「『"\'“‘].+["\'」』"\'”’]$', line)) or \
+                                   bool(re.match(r'^.{1,40}[?!？！]$', line))
         
         # Check for sentence endings (but not chapter indicators)
         features['is_sentence'] = bool(re.search(r'[.。다요죠습]$', line)) and not features['has_chapter_indicator']
@@ -250,9 +250,9 @@ class StructuralAnalyzer:
         # Note: Penalties can drive scores negative before clamping to [0, 1]
         # This ensures dialogue/sentences are strongly discouraged as candidates
         if features.get('is_dialogue'):
-            score -= 0.4  # Strong penalty for dialogue
+            score -= 0.4  # Strong penalty for dialogue (as per plan)
         if features.get('is_sentence'):
-            score -= 0.3  # Penalty for regular sentences
+            score -= 0.3  # Penalty for regular sentences (as per plan)
         
         # Normalize to 0-1 range (clamp both lower and upper bounds)
         return min(1.0, max(0.0, score))

@@ -36,7 +36,7 @@ class ChapterSplitRunner:
     """Stage 4: 챕터 분할 메인 실행기"""
     
     # Enhanced recovery constants
-    MAX_RETRIES = 5  # Increased from 3 to support more recovery attempts
+    MAX_RETRIES = 3  # Increased from 3 to support more recovery attempts
     TITLE_CANDIDATE_RETRY_THRESHOLD = 2  # Start using title candidates after this many retries
     MAX_GAPS_TO_ANALYZE = 3  # Limit gap analysis to top N gaps for efficiency
     ESTIMATED_AVG_LINE_BYTES = 1000  # Estimated average bytes per line for position calculations
@@ -45,7 +45,7 @@ class ChapterSplitRunner:
     MIN_VALID_CHAPTER_LENGTH = 100  # Minimum characters for a valid chapter
     MAX_EMPTY_CHAPTER_RATIO = 0.1  # Maximum ratio of empty chapters (10%)
     MIN_AVG_CHAPTER_LENGTH = 500  # Minimum average chapter length in characters
-    MIN_DISTANCE_FROM_ANCHOR = 10  # Minimum line distance from anchors when filtering candidates
+    MIN_DISTANCE_FROM_ANCHOR = 20  # Minimum line distance from anchors (increased for precision)
     
     def __init__(self, db: Database):
         """
@@ -565,9 +565,9 @@ class ChapterSplitRunner:
             logger.info(f"   ✅ [Stage 1 Complete] Generated {len(candidates)} structural candidates")
             reconciliation_log.append(f"구조 분석: {len(candidates)} 후보 생성")
             
-            # Filter out candidates near anchors to reduce AI scoring load
-            if anchor_boundaries and len(candidates) > 200:
-                logger.info(f"   🔧 Filtering candidates near anchors to reduce AI scoring load...")
+            # Stage 1-B: ALWAYS filter out candidates near anchors to reduce noise and load
+            if anchor_boundaries:
+                logger.info(f"   🔧 Filtering candidates near {len(anchor_boundaries)} anchors...")
                 filtered_candidates = []
                 
                 for cand in candidates:
@@ -582,9 +582,16 @@ class ChapterSplitRunner:
                 logger.info(f"   📊 Filtered from {len(candidates)} to {len(filtered_candidates)} candidates")
                 candidates = filtered_candidates
             
-            # Stage 2: AI scoring (optional, can be expensive for large candidate sets)
-            # Only score if we have a reasonable number of candidates
-            if len(candidates) <= 200:  # Limit to prevent excessive API calls
+            # Stage 2: AI scoring
+            MAX_AI_CANDIDATES = 300  # Increased from 200 as per plan
+            
+            if len(candidates) > MAX_AI_CANDIDATES:
+                logger.warning(f"   ⚠️  Too many candidates ({len(candidates)}), selecting Top {MAX_AI_CANDIDATES} by structural score")
+                # Sort by structural confidence and take top N
+                candidates.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+                candidates = candidates[:MAX_AI_CANDIDATES]
+            
+            if candidates:
                 logger.info("   🤖 [Pipeline Stage 2/5] AI likelihood scoring...")
                 logger.info(f"      → Scoring {len(candidates)} candidates with AI (batch_size=10)")
                 candidates = self.ai_scorer.score_candidates(
@@ -594,10 +601,9 @@ class ChapterSplitRunner:
                     batch_size=10
                 )
                 logger.info("   ✅ [Stage 2 Complete] AI scoring complete")
-                reconciliation_log.append("AI 스코어링 완료")
+                reconciliation_log.append(f"AI 스코어링 완료 ({len(candidates)}개)")
             else:
-                logger.warning(f"   ⚠️  [Stage 2 Skipped] Too many candidates ({len(candidates)}), skipping AI scoring")
-                reconciliation_log.append(f"AI 스코어링 스킵 (후보 수 과다: {len(candidates)})")
+                logger.warning("   ⚠️  [Stage 2 Skipped] No candidates left after filtering")
             
             # Stage 3: Topic change detection (if we still need more coverage)
             logger.info("   🔍 [Pipeline Stage 3/5] Topic change detection...")
@@ -685,14 +691,17 @@ class ChapterSplitRunner:
                 empty_count = sum(1 for ch in chapters if ch.length < self.MIN_VALID_CHAPTER_LENGTH)
                 empty_ratio = empty_count / len(chapters)
                 if empty_ratio > self.MAX_EMPTY_CHAPTER_RATIO:
-                    logger.error(f"   ❌ Quality check FAILED: {empty_count}/{len(chapters)} chapters <{self.MIN_VALID_CHAPTER_LENGTH} chars ({empty_ratio*100:.0f}%)")
-                    logger.error(f"   🚫 Advanced pipeline rejected due to too many empty chapters")
+                    logger.error(f"   ❌ [Quality Check FAILED] High empty chapter ratio: {empty_count}/{len(chapters)} ({empty_ratio*100:.1f}%)")
+                    logger.error(f"      → Criteria: < {self.MAX_EMPTY_CHAPTER_RATIO*100}% required")
+                    logger.error(f"      → Threshold: < {self.MIN_VALID_CHAPTER_LENGTH} chars is considered empty")
+                    logger.error(f"   🚫 Advanced pipeline REJECTED due to poor structure")
                     return None
                 
                 avg_length = sum(ch.length for ch in chapters) / len(chapters)
                 if avg_length < self.MIN_AVG_CHAPTER_LENGTH:
-                    logger.error(f"   ❌ Quality check FAILED: avg chapter length = {avg_length:.0f} chars")
-                    logger.error(f"   🚫 Advanced pipeline rejected due to low average chapter length")
+                    logger.error(f"   ❌ [Quality Check FAILED] Average chapter length too short: {avg_length:.0f} chars")
+                    logger.error(f"      → Criteria: >= {self.MIN_AVG_CHAPTER_LENGTH} chars required")
+                    logger.error(f"   🚫 Advanced pipeline REJECTED due to content density issues")
                     return None
                 
                 logger.info(f"   ✅ Quality check PASSED: avg length = {avg_length:.0f} chars, empty ratio = {empty_ratio*100:.1f}%")

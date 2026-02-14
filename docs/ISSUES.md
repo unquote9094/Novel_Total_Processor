@@ -7,10 +7,11 @@
 
 ## 📊 현재 상태
 
-### 🟢 열린 이슈 (11개)
+### 🟢 열린 이슈 (12개)
 
 | # | 제목 | 라벨 |
 |:---:|:---|:---:|
+| 21 | [기능] Stage4: 대화문 필터링 및 구조 분석 고도화 | enhancement |
 | 11 | [기능] Stage 4 Chapter Splitting & Stage 2/5 Enhancement | enhancement |
 | 10 | [개선] 사용성 개선: 메뉴 TUI + 한글 메시지 | enhancement |
 | 9 | [기능] Phase E: Stage 6 + TUI + CLI (통합 파이프라인) | enhancement |
@@ -25,4 +26,4 @@
 
 ---
 
-> **마지막 동기화**: 2026-02-13 22:20:49
+> **마지막 동기화**: 2026-02-14 19:11:20

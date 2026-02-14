@@ -214,7 +214,7 @@ Examples of real chapter title patterns used in Korean novels:
     def _run_adaptive_retry_v3(self, target_file: str, current_pattern: str, verify_stats: dict, encoding: str = 'utf-8') -> str:
         """v3.0 정밀 추적 로직 (최대 10회)"""
         retry_count = 0
-        max_retries = 10
+        max_retries = 3
         pattern = current_pattern
         stats = verify_stats
         
