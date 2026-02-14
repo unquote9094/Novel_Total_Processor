@@ -23,11 +23,16 @@ class Splitter:
     """
     
     # Multi-line title detection constants
-    BRACKET_PATTERN_LENGTH = 50  # Max length to check for bracket patterns in title candidates
-    MAX_TITLE_LENGTH = 100  # Max length to extract from matched title line
+    # BRACKET_PATTERN_LENGTH: Check first 50 chars for bracket patterns to detect multi-line titles
+    # This is chosen to cover typical Korean novel title formats like "[웹소설 - 34화]"
+    BRACKET_PATTERN_LENGTH = 50
+    
+    # MAX_TITLE_LENGTH: Limit extracted title to 100 chars to avoid including body text
+    # Korean chapter titles rarely exceed this length, and it helps maintain clean separation
+    MAX_TITLE_LENGTH = 100
     
     def __init__(self):
-        self.title_candidates = []  # Explicit title lines for fallback splitting
+        pass  # No instance state needed; all parameters passed to split() method
     
     def split(
         self,

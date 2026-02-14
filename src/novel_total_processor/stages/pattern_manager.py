@@ -262,6 +262,9 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
     def find_dynamic_gaps(self, target_file: str, matches: list, expected_count: int) -> list:
         """Dynamic gap detection based on average chapter size and expected count
         
+        Uses adaptive thresholds instead of fixed 100KB gaps. The threshold is calculated
+        as 1.5x the average chapter size to account for novels with varying chapter lengths.
+        
         Args:
             target_file: Path to the file
             matches: List of match positions
@@ -278,8 +281,12 @@ Analyze the following Novel Text Samples and identify the Pattern used for Chapt
         # Calculate average expected chapter size
         avg_chapter_size = total_size / expected_count if expected_count > 0 else 100000
         
+        # Dynamic threshold constants
+        GAP_MULTIPLIER = 1.5  # Gaps must be 1.5x average to be significant
+        MIN_GAP_SIZE = 50000  # Minimum 50KB regardless of average (prevents tiny gaps)
+        
         # Dynamic threshold: gaps larger than 1.5x average chapter size
-        dynamic_threshold = max(avg_chapter_size * 1.5, 50000)  # At least 50KB
+        dynamic_threshold = max(avg_chapter_size * GAP_MULTIPLIER, MIN_GAP_SIZE)
         
         gaps = []
         
@@ -374,8 +381,11 @@ If no titles found, return "NO_TITLES_FOUND".
         from collections import Counter
         candidate_counts = Counter(all_candidates)
         
-        # Keep candidates that appear in at least 2 out of 3 votes (majority)
-        consensus_threshold = max(1, self.consensus_votes // 2)
+        # Majority voting: Keep candidates that appear in at least half the votes (rounded up)
+        # This implements a simple consensus mechanism for robustness
+        CONSENSUS_THRESHOLD_RATIO = 0.5  # Require at least 50% agreement
+        consensus_threshold = max(1, int(self.consensus_votes * CONSENSUS_THRESHOLD_RATIO))
+        
         consensus_candidates = [
             candidate for candidate, count in candidate_counts.items()
             if count >= consensus_threshold

@@ -181,7 +181,7 @@ class ChapterSplitRunner:
             reconciliation_log = []
             
             # Enhanced recovery loop with multi-signal detection
-            # 부족하거나(Under) 넘칠 때(Over) 모두 정밀 분석 트리거
+            # Under/Over detection: triggers detailed analysis for mismatch cases
             retry_count = 0
             title_candidates_used = False
             
