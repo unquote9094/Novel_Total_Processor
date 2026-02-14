@@ -4,6 +4,7 @@ Scores each candidate line with surrounding context to determine
 likelihood that it's a true chapter title boundary.
 """
 
+import re
 import time
 from typing import List, Dict, Any, Optional
 from novel_total_processor.ai.gemini_client import GeminiClient
@@ -172,7 +173,6 @@ Return ONLY the numeric score (e.g., 0.8). No explanation.
             score_str = response.strip()
             
             # Try to extract a number from the response
-            import re
             numbers = re.findall(r'0?\.\d+|1\.0|0|1', score_str)
             if numbers:
                 score = float(numbers[0])

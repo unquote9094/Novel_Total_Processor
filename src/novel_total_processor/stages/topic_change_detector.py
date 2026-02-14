@@ -185,7 +185,6 @@ Return ONLY the numeric score. No explanation.
             score_str = response.strip()
             
             # Extract score
-            import re
             numbers = re.findall(r'0?\.\d+|1\.0|0|1', score_str)
             if numbers:
                 score = float(numbers[0])

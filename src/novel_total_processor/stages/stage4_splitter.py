@@ -6,6 +6,9 @@ NovelAIze-SSR v3.0 포팅 + 챕터 제목 분석 추가
 
 import json
 import re
+import os
+import tempfile
+import traceback
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from novel_total_processor.utils.logger import get_logger
@@ -184,7 +187,6 @@ class ChapterSplitRunner:
                                 full_text.append(text_only)
                     
                     # Write to temp file for text-based processing
-                    import tempfile
                     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as tmp:
                         tmp_path = tmp.name
                         tmp.write('\n\n'.join(full_text))
@@ -200,7 +202,6 @@ class ChapterSplitRunner:
                     )
                     
                     # Clean up temp file
-                    import os
                     os.unlink(tmp_path)
                     
                     if text_chapters and len(text_chapters) == expected_count:
@@ -360,6 +361,35 @@ class ChapterSplitRunner:
         
         # 4. 챕터 제목 분석 (본편/외전/에필로그 분류)
         summary = self._analyze_chapter_types(chapters)
+        
+        # 5. 결과 저장
+        result = {
+            "chapters": [
+                {
+                    "cid": ch.cid,
+                    "title": ch.title,
+                    "subtitle": ch.subtitle,
+                    "length": ch.length,
+                    "chapter_type": ch.chapter_type
+                }
+                for ch in chapters
+            ],
+            "summary": summary,
+            "patterns": {
+                "chapter_pattern": chapter_pattern,
+                "subtitle_pattern": subtitle_pattern
+            },
+            "reconciliation_log": file_info.get("reconciliation_log", "")
+        }
+        
+        # 캐시 저장
+        cache_path = self.cache_dir / f"{file_hash}.json"
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"   ✅ 캐시 저장: {cache_path}")
+        
+        return result
     
     def _advanced_escalation_pipeline(
         self,
@@ -478,38 +508,8 @@ class ChapterSplitRunner:
             
         except Exception as e:
             logger.error(f"   ❌ Advanced escalation pipeline error: {e}")
-            import traceback
             traceback.print_exc()
             return None
-        
-        # 5. 결과 저장
-        result = {
-            "chapters": [
-                {
-                    "cid": ch.cid,
-                    "title": ch.title,
-                    "subtitle": ch.subtitle,
-                    "length": ch.length,
-                    "chapter_type": ch.chapter_type
-                }
-                for ch in chapters
-            ],
-            "summary": summary,
-            "patterns": {
-                "chapter_pattern": chapter_pattern,
-                "subtitle_pattern": subtitle_pattern
-            },
-            "reconciliation_log": file_info.get("reconciliation_log", "")
-        }
-        
-        # 캐시 저장
-        cache_path = self.cache_dir / f"{file_hash}.json"
-        with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-        
-        logger.info(f"   ✅ 캐시 저장: {cache_path}")
-        
-        return result
     
     def _analyze_chapter_types(self, chapters: List[Chapter]) -> Dict[str, Any]:
         """챕터 제목 분석하여 본편/외전/에필로그 분류
