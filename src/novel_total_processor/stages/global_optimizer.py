@@ -135,6 +135,15 @@ class GlobalOptimizer:
         
         logger.info(f"   ✅ Optimizer: Selected {len(selected)} boundaries")
         
+        # [Debug Logging] Show boundary details
+        if selected:
+            logger.info(f"   📊 Boundary format details:")
+            logger.info(f"      → Type: line_num (0-indexed line numbers) + byte_pos + text")
+            logger.info(f"      → Count: {len(selected)} boundaries selected")
+            logger.info(f"      → Sample (first 3):")
+            for i, sel in enumerate(selected[:3]):
+                logger.info(f"         {i+1}. line={sel['line_num']}, pos={sel['byte_pos']}, score={sel.get('combined_score', 0):.2f}")
+        
         return selected
     
     def _calculate_combined_scores(
