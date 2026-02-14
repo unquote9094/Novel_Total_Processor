@@ -755,9 +755,6 @@ If no titles found, return "NO_TITLES_FOUND".
             return enhanced
         
         return pattern
-
-        return consensus_candidates
-
     
     def direct_ai_title_search(
         self,
