@@ -535,40 +535,41 @@ class ChapterSplitRunner:
             
             reconciliation_log.append(f"최적화: {len(selected)}개 경계 선택")
             
-            # Stage 5: Split using selected boundaries
+            # Stage 5: Split using selected boundaries directly (bypass regex patterns)
             logger.info("   📝 [Pipeline Stage 5/5] Splitting chapters using selected boundaries...")
-            logger.info(f"      → Boundaries: {len(selected)} (format: line_num/text/byte_pos)")
-            if selected:
-                sample_text = selected[0]['text']
-                logger.info(f"      → Sample: line={selected[0]['line_num']}, text='{sample_text[:30] if len(sample_text) > 30 else sample_text}...'")
+            logger.info(f"      → Boundary count: {len(selected)} (expected: {expected_count})")
+            logger.info(f"      → Boundary format: line_num={selected[0]['line_num']}, text='{selected[0]['text'][:20]}...'")
             
-            # Extract and validate title lines from selected candidates
-            title_lines = [cand['text'] for cand in selected if cand.get('text', '').strip()]
-            
-            if not title_lines:
-                logger.error("      ❌ No valid title lines from boundaries")
+            # Validate boundaries before splitting
+            if len(selected) != expected_count:
+                logger.error(f"   ❌ [Stage 5 Failed] Boundary count mismatch: got {len(selected)}, expected {expected_count}")
                 return None
             
-            if len(title_lines) < len(selected):
-                logger.warning(f"      ⚠️  Filtered {len(selected) - len(title_lines)} empty boundaries")
+            # Validate all boundaries have required fields
+            for i, boundary in enumerate(selected):
+                if not boundary.get('text', '').strip():
+                    logger.error(f"   ❌ [Stage 5 Failed] Boundary {i} has empty text at line {boundary.get('line_num', '?')}")
+                    return None
+                if 'line_num' not in boundary:
+                    logger.error(f"   ❌ [Stage 5 Failed] Boundary {i} missing line_num field")
+                    return None
             
-            # Use splitter with permissive pattern and explicit title candidates
-            permissive_pattern = r'.+'
-            
-            chapters = list(self.splitter.split(
-                file_path,
-                permissive_pattern,
-                subtitle_pattern=None,
-                encoding=encoding,
-                title_candidates=title_lines
-            ))
+            # Use boundary-based split (bypasses regex pattern matching)
+            try:
+                chapters = list(self.splitter.split_by_boundaries(
+                    file_path,
+                    selected,
+                    encoding=encoding
+                ))
+            except ValueError as e:
+                logger.error(f"   ❌ [Stage 5 Failed] Boundary validation error: {e}")
+                return None
             
             # Report creation results
             if len(chapters) == 0:
                 logger.error(f"   ❌ [Stage 5 Failed] Created 0 chapters from {len(selected)} boundaries!")
-                logger.error(f"      → Boundary/splitter mismatch - check title_candidates format")
                 return None
-            elif len(chapters) < len(selected):
+            elif len(chapters) != len(selected):
                 logger.warning(f"   ⚠️  [Stage 5 Partial] Created {len(chapters)}/{len(selected)} chapters")
             else:
                 logger.info(f"   ✅ [Stage 5 Complete] Created {len(chapters)} chapters from {len(selected)} boundaries")

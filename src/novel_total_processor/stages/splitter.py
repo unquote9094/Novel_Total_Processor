@@ -6,7 +6,7 @@ Enhanced with permissive pattern detection to avoid matching body text as titles
 
 import re
 import os
-from typing import Generator, Tuple, Optional, List
+from typing import Generator, Tuple, Optional, List, Dict, Any
 from novel_total_processor.stages.chapter import Chapter
 from novel_total_processor.utils.logger import get_logger
 
@@ -271,3 +271,82 @@ class Splitter:
             
         gaps.sort(key=lambda x: x['size'], reverse=True)
         return gaps[:5]
+    
+    def split_by_boundaries(
+        self,
+        file_path: str,
+        boundaries: List[Dict[str, Any]],
+        encoding: str = 'utf-8'
+    ) -> Generator[Chapter, None, None]:
+        """Split chapters directly using boundary positions, bypassing regex patterns
+        
+        This method splits the file into chapters using the exact line numbers provided
+        in boundaries, without any regex pattern matching. This ensures we get exactly
+        the number of chapters as boundaries provided.
+        
+        Args:
+            file_path: Path to the text file
+            boundaries: List of boundary dicts with 'line_num' and 'text' keys
+            encoding: File encoding
+            
+        Yields:
+            Chapter objects
+            
+        Raises:
+            ValueError: If boundaries are invalid or missing required fields
+        """
+        if not boundaries:
+            raise ValueError("No boundaries provided for splitting")
+        
+        # Validate boundaries
+        for i, boundary in enumerate(boundaries):
+            if 'line_num' not in boundary:
+                raise ValueError(f"Boundary {i} missing 'line_num' field")
+            if 'text' not in boundary:
+                raise ValueError(f"Boundary {i} missing 'text' field")
+            if not boundary['text'].strip():
+                raise ValueError(f"Boundary {i} has empty text")
+        
+        # Sort boundaries by line number
+        sorted_boundaries = sorted(boundaries, key=lambda x: x['line_num'])
+        
+        # Read all lines from file
+        try:
+            with open(file_path, 'r', encoding=encoding, errors='replace') as f:
+                all_lines = f.readlines()
+        except Exception as e:
+            raise ValueError(f"Failed to read file: {e}")
+        
+        total_lines = len(all_lines)
+        
+        # Split by boundaries
+        for i, boundary in enumerate(sorted_boundaries):
+            line_num = boundary['line_num']
+            title = boundary['text'].strip()
+            
+            # Validate line number
+            if line_num < 0 or line_num >= total_lines:
+                raise ValueError(f"Boundary {i} line_num={line_num} out of range [0, {total_lines})")
+            
+            # Extract body from current boundary to next boundary (or end of file)
+            start_line = line_num + 1  # Body starts after title line
+            if i + 1 < len(sorted_boundaries):
+                end_line = sorted_boundaries[i + 1]['line_num']  # End at next title
+            else:
+                end_line = total_lines  # Last chapter goes to end of file
+            
+            # Build body text
+            body_lines = all_lines[start_line:end_line]
+            body_text = "".join(body_lines).strip()
+            
+            # Yield chapter
+            if body_text:  # Only yield if there's actual content
+                yield Chapter(
+                    cid=i,
+                    title=title,
+                    subtitle="",
+                    body=body_text,
+                    length=len(body_text)
+                )
+            else:
+                logger.warning(f"   ⚠️  Chapter {i} '{title}' has empty body (lines {start_line}-{end_line})")
