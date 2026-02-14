@@ -54,6 +54,9 @@ class Splitter:
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
         
+        # Save pattern for permissiveness check
+        pattern_str = chapter_pattern
+        
         try:
             pattern = re.compile(chapter_pattern)
             subtitle_re = re.compile(subtitle_pattern) if subtitle_pattern else None
@@ -69,6 +72,7 @@ class Splitter:
             logger.info(f"   🔍 Splitter: Using {len(title_candidates)} explicit title_candidates")
             logger.info(f"      → Will skip aggressive body text filtering")
             logger.info(f"      → Sample candidates: {title_candidates[:3] if len(title_candidates) > 0 else []}")
+            logger.info(f"      → Pattern: '{pattern_str}' (permissive: {pattern_str in [r'.+', r'.', r'.*']})")
         
         buffer = []
         current_title = ""
@@ -100,9 +104,12 @@ class Splitter:
                 # 정규식 매칭 (제목 여부 확인) or explicit title
                 match = pattern.search(line_stripped)
                 
-                # When using explicit titles, ONLY use explicit title matching
-                # The pattern is permissive and would match everything otherwise
-                if using_explicit_titles:
+                # When using explicit titles with a permissive pattern (.+),
+                # ONLY use explicit title matching to avoid matching all lines
+                # But if pattern is specific (not permissive), use both methods
+                is_permissive_pattern = (pattern_str in [r'.+', r'.', r'.*'])
+                
+                if using_explicit_titles and is_permissive_pattern:
                     is_chapter_boundary = is_explicit_title
                 else:
                     is_chapter_boundary = match or is_explicit_title
@@ -129,14 +136,17 @@ class Splitter:
                         # 본문 내 불필요한 제목 패턴 라인 제거
                         # IMPORTANT: When using explicit title_candidates with permissive pattern,
                         # skip this filtering to avoid removing all body text
-                        if not using_explicit_titles:
+                        # But allow it for specific patterns combined with title_candidates
+                        is_permissive_pattern = (pattern_str in [r'.+', r'.', r'.*'])
+                        if not (using_explicit_titles and is_permissive_pattern):
                             body_lines = body_text.splitlines()
                             body_text = "\n".join([bl for bl in body_lines if not pattern.search(bl.strip())]).strip()
                         
                         # [M-45] 가짜 챕터 가드 (번호 없는 초단문 병합)
-                        # IMPORTANT: Skip this guard when using explicit title_candidates
+                        # IMPORTANT: Skip this guard when using explicit title_candidates with permissive pattern
                         # The boundaries from advanced pipeline are already validated
-                        if not using_explicit_titles and len(body_text) < 100 and not re.search(r'\d+', current_title):
+                        is_permissive_pattern = (pattern_str in [r'.+', r'.', r'.*'])
+                        if not (using_explicit_titles and is_permissive_pattern) and len(body_text) < 100 and not re.search(r'\d+', current_title):
                             buffer = [f"\n{current_title}\n", body_text + "\n"]
                             if using_explicit_titles:
                                 logger.info(f"   ⚠️  Merging short chapter (< 100 chars, no number): '{current_title[:30]}'")

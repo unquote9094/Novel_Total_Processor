@@ -1,4 +1,4 @@
-"""Test to reproduce the boundary conversion issue in Stage 5"""
+"""Test to verify the boundary conversion fix in Stage 5"""
 
 import os
 import sys
@@ -29,17 +29,23 @@ sys.modules['novel_total_processor.ai.gemini_client'] = mock_gemini
 from novel_total_processor.stages.structural_analyzer import StructuralAnalyzer
 from novel_total_processor.stages.ai_scorer import AIScorer
 from novel_total_processor.stages.global_optimizer import GlobalOptimizer
-from novel_total_processor.stages.topic_change_detector import TopicChangeDetector
 from novel_total_processor.stages.splitter import Splitter
 from novel_total_processor.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-def test_full_pipeline():
-    """Test the full pipeline from structural analysis to chapter splitting"""
+def test_full_pipeline_with_permissive_pattern():
+    """Test the full pipeline from structural analysis to chapter splitting
     
-    # Create test file
+    This test verifies that:
+    1. Boundaries are correctly selected by the global optimizer
+    2. When using a permissive pattern (.+) with title_candidates,
+       the splitter correctly creates chapters
+    3. The permissive pattern doesn't match body text as titles
+    """
+    
+    # Create test file with multiple chapters
     test_content = """
 
 프롤로그: 시작
@@ -74,64 +80,32 @@ def test_full_pipeline():
     try:
         expected_count = 5
         
-        # Stage 1-4: Generate and select boundaries
         logger.info("=" * 80)
-        logger.info("Testing Full Pipeline: Stages 1-5")
+        logger.info("Testing Boundary Conversion Fix: Full Pipeline (Stages 1-5)")
         logger.info("=" * 80)
         
+        # Initialize components
         client = MockGeminiClient()
         structural = StructuralAnalyzer()
         scorer = AIScorer(client)
         optimizer = GlobalOptimizer()
         splitter = Splitter()
         
-        # Stage 1: Structural analysis
-        logger.info("\n[Stage 1] Structural Analysis")
-        candidates = structural.generate_candidates(
-            test_file,
-            encoding='utf-8',
-            max_candidates=expected_count * 5
-        )
-        logger.info(f"  Generated {len(candidates)} candidates")
-        for i, cand in enumerate(candidates[:10]):
-            logger.info(f"    {i+1}. line_num={cand['line_num']}, text='{cand['text']}'")
+        # Stage 1-4: Generate, score, and select boundaries
+        candidates = structural.generate_candidates(test_file, encoding='utf-8', max_candidates=expected_count * 5)
         
-        # Stage 2: AI Scoring (limited)
-        logger.info("\n[Stage 2] AI Scoring")
         if len(candidates) <= 30:
             scored = scorer.score_candidates(test_file, candidates, encoding='utf-8', batch_size=5)
         else:
             scored = candidates
-        logger.info(f"  Scored {len(scored)} candidates")
         
-        # Stage 4: Global Optimization
-        logger.info("\n[Stage 4] Global Optimization")
-        selected = optimizer.select_optimal_boundaries(
-            scored,
-            expected_count,
-            test_file,
-            encoding='utf-8'
-        )
-        logger.info(f"  Selected {len(selected)}/{expected_count} boundaries")
-        logger.info("  Selected boundaries:")
-        for i, sel in enumerate(selected):
-            logger.info(f"    {i+1}. line_num={sel['line_num']}, byte_pos={sel.get('byte_pos', 'N/A')}, text='{sel['text']}'")
+        selected = optimizer.select_optimal_boundaries(scored, expected_count, test_file, encoding='utf-8')
         
-        # Stage 5: Split using selected boundaries
-        logger.info("\n[Stage 5] Splitting chapters using selected boundaries")
+        logger.info(f"\nSelected {len(selected)}/{expected_count} boundaries")
         
-        # Extract title lines from selected candidates (THIS IS THE KEY PART)
+        # Stage 5: Split using selected boundaries with permissive pattern
         title_lines = [cand['text'] for cand in selected]
-        logger.info(f"  Extracted {len(title_lines)} title_candidates:")
-        for i, title in enumerate(title_lines):
-            logger.info(f"    {i+1}. '{title}'")
-        
-        # Use splitter with permissive pattern
-        permissive_pattern = r'.+'  # Match any non-empty line
-        
-        logger.info(f"  Calling splitter.split() with:")
-        logger.info(f"    - pattern: {permissive_pattern}")
-        logger.info(f"    - title_candidates: {len(title_lines)} items")
+        permissive_pattern = r'.+'  # This should NOT match body text when using title_candidates
         
         chapters = list(splitter.split(
             test_file,
@@ -141,36 +115,24 @@ def test_full_pipeline():
             title_candidates=title_lines
         ))
         
-        logger.info(f"\n[Result] Created {len(chapters)} chapters from {len(selected)} selected boundaries")
+        logger.info(f"\nResult: Created {len(chapters)} chapters from {len(selected)} boundaries")
         
-        if len(chapters) == 0:
-            logger.error("\n❌ ISSUE REPRODUCED: Got 0 chapters!")
-            logger.error("  This is the bug we need to fix.")
-            
-            # Debug: Let's check if title_candidates match anything in the file
-            logger.info("\n[Debug] Checking if title_candidates exist in file:")
-            with open(test_file, 'r', encoding='utf-8') as f:
-                file_lines = f.readlines()
-            
-            for i, title in enumerate(title_lines):
-                logger.info(f"  Searching for: '{title}'")
-                found = False
-                for line_idx, line in enumerate(file_lines):
-                    stripped = line.strip()
-                    if stripped == title or title in stripped:
-                        logger.info(f"    ✓ Found at line {line_idx}: '{stripped}'")
-                        found = True
-                        break
-                if not found:
-                    logger.error(f"    ✗ NOT FOUND in file")
-        else:
-            logger.info(f"✅ Success: Created {len(chapters)} chapters")
-            for i, ch in enumerate(chapters):
-                logger.info(f"  Chapter {i+1}: {ch.title} ({len(ch.body)} chars)")
+        # Verify results
+        assert len(chapters) > 0, "Should create at least 1 chapter"
+        assert len(chapters) == len(selected), f"Should create exactly {len(selected)} chapters, got {len(chapters)}"
+        
+        for i, ch in enumerate(chapters):
+            logger.info(f"  ✓ Chapter {i+1}: '{ch.title}' ({len(ch.body)} chars)")
+            assert len(ch.body) > 0, f"Chapter {i+1} has empty body"
+        
+        logger.info("\n✅ Boundary conversion fix verified successfully!")
+        logger.info("   - Permissive pattern (.+) correctly used with title_candidates")
+        logger.info("   - Body text not incorrectly matched as chapter titles")
+        logger.info("   - All chapters have non-empty body text")
         
     finally:
         os.unlink(test_file)
 
 
 if __name__ == "__main__":
-    test_full_pipeline()
+    test_full_pipeline_with_permissive_pattern()
