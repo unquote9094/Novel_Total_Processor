@@ -41,6 +41,11 @@ class ChapterSplitRunner:
     MAX_GAPS_TO_ANALYZE = 3  # Limit gap analysis to top N gaps for efficiency
     ESTIMATED_AVG_LINE_BYTES = 1000  # Estimated average bytes per line for position calculations
     
+    # Quality validation constants
+    MIN_VALID_CHAPTER_LENGTH = 100  # Minimum characters for a valid chapter
+    MAX_EMPTY_CHAPTER_RATIO = 0.1  # Maximum ratio of empty chapters (10%)
+    MIN_AVG_CHAPTER_LENGTH = 500  # Minimum average chapter length in characters
+    
     def __init__(self, db: Database):
         """
         Args:
@@ -541,7 +546,7 @@ class ChapterSplitRunner:
             # Log anchor information if present
             if anchor_boundaries:
                 logger.info(f"   🔒 Using {len(anchor_boundaries)} anchor boundaries from pattern matching")
-                reconciliation_log.append(f"앵커: {len(anchor_boundaries)}개 패턴 매칭 결과 고정")
+                reconciliation_log.append(f"Anchors: {len(anchor_boundaries)} pattern matching results fixed")
             
             # Stage 1: Generate structural candidates
             logger.info("   📊 [Pipeline Stage 1/5] Structural transition point analysis...")
@@ -677,15 +682,15 @@ class ChapterSplitRunner:
             
             # Quality validation: check for too many empty chapters
             if chapters:
-                empty_count = sum(1 for ch in chapters if ch.length < 100)
+                empty_count = sum(1 for ch in chapters if ch.length < self.MIN_VALID_CHAPTER_LENGTH)
                 empty_ratio = empty_count / len(chapters)
-                if empty_ratio > 0.1:  # Fail if >10% empty chapters
-                    logger.error(f"   ❌ Quality check FAILED: {empty_count}/{len(chapters)} chapters <100 chars ({empty_ratio*100:.0f}%)")
+                if empty_ratio > self.MAX_EMPTY_CHAPTER_RATIO:
+                    logger.error(f"   ❌ Quality check FAILED: {empty_count}/{len(chapters)} chapters <{self.MIN_VALID_CHAPTER_LENGTH} chars ({empty_ratio*100:.0f}%)")
                     logger.error(f"   🚫 Advanced pipeline rejected due to too many empty chapters")
                     return None
                 
                 avg_length = sum(ch.length for ch in chapters) / len(chapters)
-                if avg_length < 500:  # Fail if average chapter is too short
+                if avg_length < self.MIN_AVG_CHAPTER_LENGTH:
                     logger.error(f"   ❌ Quality check FAILED: avg chapter length = {avg_length:.0f} chars")
                     logger.error(f"   🚫 Advanced pipeline rejected due to low average chapter length")
                     return None

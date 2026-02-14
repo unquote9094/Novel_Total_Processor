@@ -25,6 +25,7 @@ class StructuralAnalyzer:
     LONG_LINE_THRESHOLD = 200  # Long lines are likely body text
     MIN_BLANK_LINES = 1  # Minimum blank lines before a potential chapter
     CONTEXT_LINES = 3  # Lines to check before/after for context
+    MAX_DIALOGUE_LENGTH = 40  # Maximum length for short dialogue/exclamation detection
     
     # Punctuation patterns that suggest chapter boundaries
     CHAPTER_INDICATORS = [
@@ -163,7 +164,7 @@ class StructuralAnalyzer:
         
         # Check for dialogue (quoted text or short exclamations)
         features['is_dialogue'] = bool(re.match(r'^["\'「『"].+["\'」』"]$', line)) or \
-                                   bool(re.match(r'^.{1,40}[?!？！]$', line))
+                                   bool(re.match(rf'^.{{1,{self.MAX_DIALOGUE_LENGTH}}}[?!？！]$', line))
         
         # Check for sentence endings (but not chapter indicators)
         features['is_sentence'] = bool(re.search(r'[.。다요죠습]$', line)) and not features.get('has_chapter_indicator')
