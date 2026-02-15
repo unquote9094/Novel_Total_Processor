@@ -59,23 +59,41 @@ class PatternManager:
                     pass 
             
             if expected_count > 0:
+                self.expected_count = expected_count # 클래스 속성으로 저장
                 logger.info(f"   🎯 [Target] 파일명에서 목표 화수 식별: {expected_count}화")
 
         # 2. AI 분석 (v3.0 원본 프롬프트 사용)
-        logger.info(f"   -> 챕터 제목 패턴을 분석 중입니다... (Reference Mode)")
-        pattern = self._analyze_pattern_v3(initial_samples)
+        logger.info(f"   -> 챕터 제목 패턴을 분석 중입니다... (Target: {expected_count}h)")
+        pattern = self._analyze_pattern_v3(initial_samples, expected_count)
         
         if not pattern or pattern == "NO_PATTERN_FOUND":
-            pattern, _ = self._try_fallback(target_file, encoding=encoding)
-            return (pattern, None)
+            # [M-45] 위험한 하드코딩 Fallback 제거하고 AI 재시도 유도
+            logger.warning("   ⚠️  Initial AI analysis failed. Trying one more time with focus.")
+            pattern = self._analyze_pattern_v3(initial_samples, expected_count)
+            if not pattern: return (None, None)
 
         # 3. 커버리지 검증 및 정밀 추적 (Plan C)
         stats = self.splitter.verify_pattern(target_file, pattern, encoding=encoding)
+        match_count = stats.get('match_count', 0)
         
-        # v3.0 기준 99% 미달 시 정밀 추적 시작
+        # [Strict Level 1 Guard] 목표 화수가 명확한데 매칭 건수가 너무 차이나면 리젝션
+        if expected_count > 0:
+            # 폭주(Flooding) 감지: 목표보다 너무 많이 찾은 경우
+            if match_count > expected_count * 1.5 or match_count > 1000:
+                logger.warning(f"   🚫 [Flooding Detected] Match count {match_count} is too high (Target: {expected_count}). Rejecting pattern.")
+                # 폭주한 패턴으로 Plan C나 Level 3를 가면 무한 루프 위험이 있으므로 즉시 중단
+                return (None, None) 
+            
+            # 부족 감지: 목표보다 적게 찾은 경우 -> 보완 시도
+            lower_bound = expected_count * 0.9  # 90% 미만일 때만 보완 시도
+            if match_count < lower_bound:
+                logger.warning(f"   ⚠️  Low coverage ({match_count}/{expected_count}). Escalating to Plan C.")
+                stats['coverage_ok'] = False 
+        
+        # v3.0 기준 99% 미달 시 또는 위 조건 불충족 시 정밀 추적 시작
         if not stats.get('coverage_ok'):
             cur_ratio = stats.get('last_match_ratio', 0)
-            logger.warning(f"   ⚠️ 패턴 커버리지 낮음 ({cur_ratio*100:.1f}%). 정밀 추적(Plan C)을 시작합니다.")
+            logger.warning(f"   ⚠️ 패턴 보완 필요 (Found: {match_count}/{expected_count}). 정밀 추적(Plan C)을 시작합니다.")
             pattern = self._run_adaptive_retry_v3(target_file, pattern, stats, encoding=encoding)
             stats = self.splitter.verify_pattern(target_file, pattern, encoding=encoding)
 
@@ -121,92 +139,81 @@ Return ONLY the raw Regex string. No markdown, no explanations.
 """
         return self._generate_regex_from_ai(prompt)
 
-    def _analyze_pattern_v3(self, sample_text: str) -> Optional[str]:
-        """NovelAIze-SSR v3.0 원본 프롬프트 복원 + Enhanced with Korean novel patterns"""
-        prompt = f"""=== pattern_analysis ===
-You are an expert in Regex (Regular Expressions) and Text Analysis.
-Analyze the following Novel Text Samples and identify the Pattern used for Chapter Titles.
+    def _analyze_pattern_v3(self, sample_text: str, expected_count: int = 0) -> Optional[str]:
+        """[T5.1] AI 프롬프트 원천 개편: 편향성 제거 및 구조 중심 분석"""
+        target_info = f"The expected number of chapters is approximately {expected_count}." if expected_count > 0 else ""
+        
+        prompt = f"""=== novel_structure_analysis ===
+You are an expert in Text Structure Analysis and Regex.
+Analyze the following Novel Text Samples and identify the consistent Pattern used for Chapter Titles.
 
-[Common Korean Novel Chapter Formats]
-Examples of real chapter title patterns used in Korean novels:
-- Numbered: "N화", "제N화", "N회", "제N장", "Chapter N", "Ep.N", "Episode N", "N話", "第N話"
-- Bracketed: "< 제목 >", "【 제목 】", "[ 제목 ]", "[N화]", "<N화>"
-- Decorated: "― 제목 ―", "★ 제목", "◆ 제목 ◆", "■ 제목", "▣ N화"
-- Special: "프롤로그", "에필로그", "외전", "번외", "후기", "작가의 말"
-- Mixed: Some chapters may have numbers, others may not (e.g., "< 에피소드(3) >" and "< 연습생 면접 >")
+[Context]
+{target_info}
+A chapter title is a line that marks the beginning of a new chapter. 
+In this novel, it may use specific brackets like `<...>`, `[...]`, or numbering, or unique decorations.
 
-[CRITICAL WARNINGS]
-1. **START vs END Markers**: 
-   - Some novels use PAIRED structures: "< 제목 >" (START) and "< 제목 > 끝" (END)
-   - Your regex MUST match ONLY the START markers
-   - **EXCLUDE** any lines ending with: "끝", "완", "END", "fin", "종료", "끗", "end", "完"
-   - Use negative lookahead if needed: (?!.*끝\\s*$)
+[Task]
+1. Find the consistent structural pattern used for Chapter START titles.
+2. EXCLUDE end markers (lines ending with "끝", "완", "END", "fin", etc.).
+3. Formulate a Python Regex that matches ONLY these start title lines.
+4. **DO NOT** assume common patterns like "1화", "Chapter 1" unless they actually appear in the samples.
+5. **BE PRECISE**: Use `^` (start of line) and `$` (end of line) anchors if titles occupy a whole line.
+6. Use `\\d+` for numbers that MUST be present, or `(?:\\d+)?` if optional.
 
-2. **Number Flexibility**:
-   - Numbers may be OPTIONAL in titles
-   - Some chapters have numbers ("< 에피소드(3) >"), others don't ("< 연습생 면접 >")
-   - Do NOT require \\d+ if the pattern works without it
-
-3. **Pattern Precision**:
-   - Match complete title lines, not just fragments
-   - Avoid matching dialogue, body text, or page numbers
-   - Look for consistent formatting (brackets, spacing, decoration)
-
-[Tasks]
-1. Find all consistent patterns that denote a new chapter START.
-   **CRITICAL: Detect Mixed or Inconsistent patterns.**
-   If the novel uses multiple formats (e.g., some use "1화", others use "Chapter 1"), identify ALL of them.
-
-2. Create a Python Compatible Regular Expression (Regex) to match these chapter START titles.
-   - Use the `|` (OR) operator to combine multiple patterns if necessary.
-   - Use `\\s*` for flexible whitespace and `\\d*` or `\\d+` for numbers (make optional if needed).
-   - **MUST exclude end markers** (lines ending with "끝", "완", "END", etc.)
-
-3. OUTPUT ONLY the raw Regex string. No markdown, no explanations.
-   - If no pattern found, return "NO_PATTERN_FOUND".
+[Visual Evidence from Samples]
+Look carefully at the samples below. What sequence of characters or symbols repeats at the start of major sections?
 
 [Novel Text Samples]
-{sample_text[:30000]}
+{sample_text[:40000]}
+
+[Output]
+Return ONLY the raw Regex string. Do not include markdown code blocks.
+If no clear pattern exists, return "NO_PATTERN_FOUND".
 """
         return self._generate_regex_from_ai(prompt)
 
     def _generate_regex_from_ai(self, prompt: str) -> Optional[str]:
-        """AI 응답 처리 공통 로직"""
+        """[T5.2] AI 응답 처리: 정밀 Regex 추출"""
         try:
             response = self.client.generate_content(prompt)
-            
-            # Fix #2: Check for None or empty response before calling .strip()
-            if response is None or not response:
-                logger.warning("   ⚠️  AI returned None or empty response, skipping")
-                return None
+            if not response: return None
             
             # 마크다운 및 불필요 텍스트 정제
-            result = response.strip().replace("```python", "").replace("```re", "").replace("```", "").replace("r'", "").replace("'", "").strip()
-            if "NO_PATTERN_FOUND" in result: return None
-            # 줄바꿈이 있는 경우 첫 줄만 사용
-            result = result.splitlines()[0] if result else None
+            # 1단계: 백틱 내부 추출 시도
+            code_match = re.search(r'```(?:python|re|regex)?\s*(.*?)\s*```', response, re.DOTALL)
+            if code_match:
+                result = code_match.group(1).strip()
+            else:
+                # 2단계: 따옴표 내부 추출 시도 (r'...' or '...')
+                quote_match = re.search(r"r?['\"](.*?)['\"]", response)
+                if quote_match:
+                    result = quote_match.group(1).strip()
+                else:
+                    # 3단계: 전체 내용 중 첫 줄 (단, 딴소리 배제)
+                    result = response.strip().splitlines()[0].strip()
             
-            # Fix #3: Enhanced regex validation and sanitization
+            if "NO_PATTERN_FOUND" in result or len(result) > 200: return None
+            
+            # Fix: Remove common wrapping artifacts
+            result = result.lstrip("r").strip("'\"")
+            
             if result:
-                # Validate pattern: reject leading '?' or other invalid patterns
-                if result.startswith('?'):
-                    logger.warning(f"   ⚠️  Rejecting invalid pattern (starts with '?'): {result}")
-                    return None
+                # [T8.1] Anchor Logic: 단순 패턴에 ^(행 시작) 강제 부여
+                # 기호(괄호, 화살표 등)가 없고 ^로 시작하지 않는 단순 텍스트 패턴인 경우
+                if not result.startswith('^') and not any(c in result for c in r'\[({<【「◈★◆■'):
+                     # 단, \d+ 로 시작하는 경우는 챕터 번호일 확률이 높으므로 ^ 추가
+                     if result.startswith(r'\d') or result.startswith(r'[0-9]'):
+                         result = '^' + result
+                         logger.info(f"   🛡️ Simplified pattern detected. Added '^' anchor for safety: {result}")
                 
-                # Check for properly matched parentheses and valid named groups
-                # Count opening and closing parentheses
-                open_parens = result.count('(')
-                close_parens = result.count(')')
-                if open_parens != close_parens:
-                    logger.warning(f"   ⚠️  Rejecting pattern with mismatched parentheses: {result}")
-                    return None
-                
+                # 유효성 검사
                 try:
                     re.compile(result)
+                    return result
                 except re.error as e:
-                    logger.error(f"   ❌ AI 생성 정규식 오류: {e} (Pattern: {result})")
+                    logger.error(f"   ❌ Invalid Regex: {e} (Raw: {result})")
                     return None
-            return result
+            return None
         except Exception as e:
             logger.error(f"   ❌ AI 분석 중 에러: {e}")
             return None
@@ -220,14 +227,14 @@ Examples of real chapter title patterns used in Korean novels:
         
         while not stats['coverage_ok'] and retry_count < max_retries:
             retry_count += 1
-            fail_pos = stats['last_match_pos']
-            
             # 실패 지점부터 다시 샘플링
             retry_sample = self.sampler.extract_samples_from(target_file, fail_pos, length=30000, encoding=encoding)
             if not retry_sample: break
                 
             logger.info(f"   🔄 [Retry {retry_count}/{max_retries}] 누락 지점({fail_pos}) 분석 중...")
-            new_pattern = self._analyze_pattern_v3(retry_sample)
+            # [T5.1] Pass expected_count to AI in Plan C as well
+            expected_count = getattr(self, 'expected_count', 0)
+            new_pattern = self._analyze_pattern_v3(retry_sample, expected_count)
             
             if new_pattern and new_pattern != "NO_PATTERN_FOUND":
                 combined_pattern = f"{pattern}|{new_pattern}"
@@ -697,7 +704,11 @@ If no titles found, return "NO_TITLES_FOUND".
             if gap >= min_gap:
                 cleaned.append(matches[i])
             else:
-                logger.debug(f"   Removing close duplicate: '{matches[i]['text']}' (gap: {gap} chars)")
+                # Log only total to avoid flooding the log file
+                pass
+        
+        if len(matches) - len(cleaned) > 0:
+            logger.info(f"      - Removed {len(matches) - len(cleaned)} close duplicates/end markers.")
         
         return cleaned
     
@@ -814,9 +825,15 @@ If no titles found, return "NO_TITLES_FOUND".
         
         logger.info(f"   📦 Split samples into {len(chunks)} chunks for AI processing")
         
-        # Process each chunk
-        for i, chunk_text in enumerate(chunks):
-            logger.info(f"   🔎 Processing chunk {i+1}/{len(chunks)} ({len(chunk_text)} chars)")
+        # Process each chunk - LIMIT AI CALLS to safety threshold
+        MAX_LEVEL3_CALLS = 5
+        process_chunks = chunks[:MAX_LEVEL3_CALLS]
+        
+        if len(chunks) > MAX_LEVEL3_CALLS:
+            logger.info(f"   ⚠️  Too many chunks ({len(chunks)}). Limiting to first {MAX_LEVEL3_CALLS} for safety.")
+
+        for i, chunk_text in enumerate(process_chunks):
+            logger.info(f"   🔎 Processing chunk {i+1}/{len(process_chunks)} ({len(chunk_text)} chars)")
             
             # Ask AI to find titles directly
             prompt = f"""=== direct_title_search ===
@@ -944,7 +961,6 @@ Example output format: ^\\s*<\\s*.+?\\s*>\\s*$
         return None
     
     def _try_fallback(self, target_file: str, encoding: str = 'utf-8') -> Tuple[Optional[str], Optional[str]]:
-        for ptn in [r"\d+\s*화", r"제\s*\d+\s*화", r"\[\d+\]"]:
-            stats = self.splitter.verify_pattern(target_file, ptn, encoding=encoding)
-            if stats['match_count'] > 0: return (ptn, None)
+        # [T6.1] 위험한 하드코딩 Fallback 로직 최소화
+        # 본 소설의 특수한 구조(<...>)를 놓칠 경우를 대비해 AI에게 전적으로 맡기는 방향으로 수정
         return (None, None)
